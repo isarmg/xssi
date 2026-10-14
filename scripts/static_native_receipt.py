@@ -213,6 +213,16 @@ def pc_libraries(contents):
     return {name for body in bodies for name in re.findall(r'(?:^|\s)-l([A-Za-z0-9_.+-]+)(?=\s|$)',body)}
 
 
+def verify_windows_copyright(installed,license_,license_md):
+    # vcpkg e456309 scripts/cmake/vcpkg_install_copyright.cmake assembles
+    # these exact two files, including basenames and blank lines. CMake's
+    # file(WRITE) uses a text-mode stream; native Windows converts LF to CRLF.
+    expected=b'COPYING.LGPLv2.1:\n\n'+license_+b'\n\nLICENSE.md:\n\n'+license_md+b'\n\n'
+    if installed==expected:return 'lf'
+    if installed==expected.replace(b'\n',b'\r\n'):return 'windows-crlf'
+    raise ValueError('Windows FFmpeg installed copyright differs from its original source')
+
+
 def record(work,stage,*,target_files,build_input_root,target,inventory_relative='share'):
     work=Path(work).resolve(strict=True);stage=Path(stage).resolve(strict=True)
     build_input_root=Path(build_input_root).resolve(strict=True)
@@ -348,8 +358,7 @@ def record_windows(work,stage,sources,targets,inventory,env):
     license_=upstream[license_paths[0]]
     installed=bounded(prefix/'share/ffmpeg/copyright',2*1024*1024)
     license_md=upstream[license_paths[0].rsplit('/',1)[0]+'/LICENSE.md']
-    if license_ not in installed or license_md not in installed:
-        raise ValueError('Windows FFmpeg installed copyright differs from its original source')
+    copyright_line_endings=verify_windows_copyright(installed,license_,license_md)
     manifests=list((work/'installed/vcpkg/info').glob('ffmpeg_*_x64-windows-static.list'))
     if len(manifests)!=1:raise ValueError('actual Windows FFmpeg installation file inventory is ambiguous')
     installed_files=set(bounded(manifests[0],4*1024*1024).decode().splitlines())
@@ -369,7 +378,10 @@ def record_windows(work,stage,sources,targets,inventory,env):
         raise ValueError('Windows media TLS or license configuration differs from the approved build')
     version=sources['ffmpeg']['version']
     source={'url':'https://github.com/ffmpeg/ffmpeg/archive/n'+version+'.tar.gz','sha256':hashlib.sha256(raw).hexdigest()}
-    media=component(stage,'ffmpeg','FFmpeg',version,source,archives,[('LGPL-2.1-or-later','copyright',installed)],targets,inventory)
+    media=component(stage,'ffmpeg','FFmpeg',version,source,archives,
+                    [('LGPL-2.1-or-later','COPYING.LGPLv2.1',license_),
+                     ('FFmpeg source licensing document','LICENSE.md',license_md),
+                     ('Actual vcpkg combined copyright','copyright',installed)],targets,inventory)
     inputs=[]
     for path in sorted((vcpkg/'ports/ffmpeg').iterdir()):
         if path.is_file():
@@ -378,7 +390,11 @@ def record_windows(work,stage,sources,targets,inventory,env):
     media['embedding']['source_files'].extend(inputs)
     proof={'format_version':1,'target':'x86_64-pc-windows-msvc','vcpkg_revision':revision,
            'source':source,'source_sha512':checksums[0],'configuration_sha256':release.digest(configurations[0]),
-           'static_libraries':sorted(libraries),'provider_inputs':inputs}
+           'static_libraries':sorted(libraries),'provider_inputs':inputs,
+           'copyright':{'generator':'https://raw.githubusercontent.com/microsoft/vcpkg/'+revision+'/scripts/cmake/vcpkg_install_copyright.cmake',
+                        'installed_sha256':hashlib.sha256(installed).hexdigest(),'line_endings':copyright_line_endings,
+                        'original_sources':[{'name':'COPYING.LGPLv2.1','sha256':hashlib.sha256(license_).hexdigest()},
+                                            {'name':'LICENSE.md','sha256':hashlib.sha256(license_md).hexdigest()}]}}
     put(stage,inventory+'/build-inputs/native/provenance.json',(json.dumps(proof,sort_keys=True,indent=2)+'\n').encode())
     platform={'ref':'urn:platform:microsoft:schannel','type':'library','name':'Microsoft Schannel','version':'Windows',
               'source':{'url':'https://learn.microsoft.com/windows/win32/secauthn/secure-channel','sha256':None},

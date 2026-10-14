@@ -101,7 +101,8 @@ class StaticNativeTests(unittest.TestCase):
         (vcpkg/'downloads/ffmpeg-ffmpeg-n9.0.2.tar.gz').write_bytes(raw)
         (vcpkg/'ports/ffmpeg/portfile.cmake').write_text('vcpkg_from_github(\n REPO ffmpeg/ffmpeg\n REF "n${VERSION}"\n SHA512 '+checksum+'\n)\n')
         (vcpkg/'ports/ffmpeg/vcpkg.json').write_text(json.dumps({'version':'9.0.2','port-version':1}))
-        (prefix/'share/ffmpeg/copyright').write_bytes(self.lgpl+b'\n'+self.license_md)
+        self.generated_copyright=b'COPYING.LGPLv2.1:\n\n'+self.lgpl+b'\n\nLICENSE.md:\n\n'+self.license_md+b'\n\n'
+        (prefix/'share/ffmpeg/copyright').write_bytes(self.generated_copyright)
         files=[]
         for name in sorted(native.FFMPEG_LIBRARIES):
             (prefix/'lib'/(name+'.lib')).write_bytes(b'!<arch>\n')
@@ -130,6 +131,8 @@ class StaticNativeTests(unittest.TestCase):
         media=components[0]
         self.assertEqual(media['dependencies'],[])
         self.assertIn('actual', (self.stage/media['licenses'][0]['path']).read_text().lower())
+        original={item['path'].rsplit('/',1)[1]:(self.stage/item['path']).read_bytes() for item in media['licenses']}
+        self.assertEqual(original,{'COPYING.LGPLv2.1':self.lgpl,'LICENSE.md':self.license_md,'copyright':self.generated_copyright})
         self.assertTrue(all(item['path'].startswith('share/build-inputs/native/') for item in media['embedding']['source_files']))
         self.assertNotIn('pkgconf',json.dumps(components))
         self.assertEqual(components[1]['delivery'],'platform')
@@ -141,7 +144,7 @@ class StaticNativeTests(unittest.TestCase):
             (prefix/'share/ffmpeg/copyright').write_bytes(b'substitute license')
             with self.assertRaisesRegex(ValueError,'copyright differs'):
                 native.record_windows(work,self.stage,definitions,self.targets,'share',{})
-            (prefix/'share/ffmpeg/copyright').write_bytes(self.lgpl+b'\n'+self.license_md)
+            (prefix/'share/ffmpeg/copyright').write_bytes(self.generated_copyright)
             self.windows_config.write_text('CONFIG_STATIC=yes\nCONFIG_SCHANNEL=yes\nCONFIG_OPENSSL=yes\n')
             with self.assertRaisesRegex(ValueError,'TLS or license'):
                 native.record_windows(work,self.stage,definitions,self.targets,'share',{})

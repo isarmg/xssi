@@ -28,6 +28,17 @@ jobs:
       - name: Install the exact native MSI inspection tool
         shell: pwsh
         run: dotnet tool install --global wix --version 4.0.6
+      - name: Install verified CMake for actual copyright output
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'cmake-3.31.3-windows-x86_64.zip'
+          curl.exe --fail --location --retry 3 --proto '=https' --output $archive https://github.com/Kitware/CMake/releases/download/v3.31.3/cmake-3.31.3-windows-x86_64.zip
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ((Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant() -ne 'd41e863589a3c152b1d14ecac2ffd1926f29aba64528984fcda8fd2b630f44ff') { throw 'CMake SHA256 differs from its official asset' }
+          $destination = Join-Path $env:RUNNER_TEMP 'xssi-cmake-3.31.3'
+          if (Test-Path $destination) { throw 'CMake requires a fresh private tool directory' }
+          Expand-Archive -LiteralPath $archive -DestinationPath $destination
+          Add-Content -Encoding utf8 $env:GITHUB_PATH (Join-Path $destination 'cmake-3.31.3-windows-x86_64/bin')
       - name: Test actual Windows process trees and regular-file readers
         shell: pwsh
         run: |
@@ -44,6 +55,8 @@ jobs:
           python -m unittest discover -s tests -p test_native_process.py -v
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m unittest discover -s tests -p test_msi_policy.py -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m unittest discover -s tests -p test_static_native_windows.py -v
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
   scripts:
     runs-on: ubuntu-24.04
