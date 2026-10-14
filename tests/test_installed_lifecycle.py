@@ -208,6 +208,173 @@ class ArchiveBoundary(unittest.TestCase):
         self.assertIn('Requires root on a disposable GitHub-hosted runner', result.stderr)
 
 
+class CameraConfiguration(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.base = Path(temporary.name)
+        product = patch.object(lifecycle, 'PRODUCT', 'xcos')
+        product.start()
+        self.addCleanup(product.stop)
+
+    def files(self, config, root, directory):
+        self.assertEqual(directory.stat().st_mode & 0o777, 0o700)
+        result = {}
+        for name in ('rtsp-cert.pem', 'rtsp-key.pem', 'mediamtx.env'):
+            path = directory / name
+            path.write_bytes(b'private import fixture')
+            path.chmod(0o600)
+            result[name] = path
+        return result
+
+    def test_import_arguments_reach_real_installer_without_installed_writes(self):
+        root = self.base / 'installed'
+        adapter = SimpleNamespace(configuration_files=self.files)
+        arguments = lifecycle.configuration_arguments(adapter, {}, root, self.base)
+        expected = []
+        for name in ('mediamtx.env', 'rtsp-cert.pem', 'rtsp-key.pem'):
+            expected.extend(('--configuration-file', name + '=' + str(self.base / 'configuration-inputs' / name)))
+        self.assertEqual(arguments, expected)
+        self.assertFalse(root.exists())
+        # The actual install invocation passes the validated arguments unchanged.
+        source = SCRIPT.read_text()
+        self.assertIn("imports = configuration_arguments(adapter, config, root, base)", source)
+        self.assertIn("'--json', *imports, input=(password + '\\n').encode()", source)
+
+    def test_main_passes_imports_to_real_install_command(self):
+        package = self.base / 'unpacked'
+        (package / 'share/config').mkdir(parents=True)
+        (package / 'share/config/config.json.example').write_text('{}')
+        archive = self.base / 'candidate.tar.gz'
+        archive.write_bytes(b'opaque command-wiring fixture')
+        adapter = SimpleNamespace(PRODUCT='xcos', ACCOUNT='isarmg-xcos',
+                                  SERVICES=('xcos.service', 'xcos-mediamtx.service'),
+                                  configure=lambda config, root, shared, port: config.update(
+                                      development=False, bind=f'127.0.0.1:{port}'),
+                                  configuration_files=self.files)
+        commands = []
+        class StopAtInstall(Exception):
+            pass
+        def run(*command, input=None):
+            if command[0] == 'bash':
+                commands.append((command, input))
+                raise StopAtInstall()
+            return b''
+        with patch.object(sys, 'argv', ['installed_lifecycle.py', '--adapter', '/adapter', str(archive), SHA]), \
+                patch.object(lifecycle, 'runner_preflight'), \
+                patch.object(lifecycle, 'load_adapter', return_value=adapter), \
+                patch.object(lifecycle, 'verify_archive', return_value=lifecycle.archive_digest(archive)), \
+                patch.object(lifecycle, 'authority_preflight'), \
+                patch.object(lifecycle, 'verify_install_parent'), \
+                patch.object(lifecycle.tempfile, 'mkdtemp', return_value=str(self.base)), \
+                patch.object(lifecycle, 'extract_package', return_value=package), \
+                patch.object(lifecycle, 'run', side_effect=run), \
+                patch.object(lifecycle, 'PRODUCT', 'xcos'), \
+                patch.object(lifecycle, 'SERVICES', adapter.SERVICES), \
+                patch.object(lifecycle, 'ACCOUNT', adapter.ACCOUNT), \
+                patch.object(lifecycle, 'SECRETS', []):
+            with self.assertRaises(StopAtInstall):
+                lifecycle.main()
+        self.assertEqual(len(commands), 1)
+        command, password = commands[0]
+        self.assertEqual(command[:2], ('bash', str(package / 'install.sh')))
+        self.assertEqual(command.count('--configuration-file'), 3)
+        for name in ('mediamtx.env', 'rtsp-cert.pem', 'rtsp-key.pem'):
+            self.assertIn(name + '=' + str(self.base / 'configuration-inputs' / name), command)
+        self.assertTrue(password.endswith(b'\n'))
+        self.assertFalse((self.base / 'installed').exists())
+
+    def test_camera_archive_requires_exact_ordered_dual_services(self):
+        archive = self.base / 'xcos-1.0.1-linux-x86_64.tar.gz'
+        prefix = archive.name.removesuffix('.tar.gz')
+        expected = ('xcos.service', 'xcos-mediamtx.service')
+        for services in (expected, expected[:1], tuple(reversed(expected))):
+            document = {'identity': {'product': 'xcos', 'version': '1.0.1',
+                                    'source_revision': SHA, 'target': 'x86_64-unknown-linux-gnu'},
+                        'services': [{'name': name} for name in services]}
+            with tarfile.open(archive, 'w:gz') as bundle:
+                data = json.dumps(document).encode()
+                member = tarfile.TarInfo(prefix + '/share/package.json')
+                member.size = len(data)
+                bundle.addfile(member, io.BytesIO(data))
+            (self.base / 'SHA256SUMS').write_text(lifecycle.archive_digest(archive) + '  ' + archive.name + '\n')
+            with patch.object(lifecycle, 'SERVICES', expected):
+                if services == expected:
+                    lifecycle.verify_archive(archive, SHA)
+                else:
+                    with self.assertRaisesRegex(RuntimeError, 'Unexpected service set'):
+                        lifecycle.verify_archive(archive, SHA)
+
+    def test_other_products_never_invoke_configuration_import_hook(self):
+        adapter = SimpleNamespace(configuration_files=lambda *_: self.fail('unexpected hook'))
+        for product in ('xscs', 'xsos', 'xszs', 'xocs'):
+            with patch.object(lifecycle, 'PRODUCT', product):
+                self.assertEqual(lifecycle.configuration_arguments(adapter, {}, self.base / 'root', self.base), [])
+        self.assertFalse((self.base / 'configuration-inputs').exists())
+
+    def test_rejects_unsafe_imports_before_installer(self):
+        for case in ('outside', 'symlink', 'hardlink', 'public', 'directory', 'missing', 'extra', 'relative'):
+            with self.subTest(case=case), tempfile.TemporaryDirectory(dir=self.base) as temporary:
+                base = Path(temporary)
+                def bad(config, root, directory):
+                    files = self.files(config, root, directory)
+                    target = files['rtsp-key.pem']
+                    if case == 'outside':
+                        outside = base / 'outside'
+                        target.rename(outside)
+                        files['rtsp-key.pem'] = outside
+                    elif case == 'symlink':
+                        target.unlink()
+                        target.symlink_to(files['rtsp-cert.pem'])
+                    elif case == 'hardlink':
+                        os.link(target, directory / 'linked')
+                    elif case == 'public':
+                        target.chmod(0o644)
+                    elif case == 'directory':
+                        target.unlink()
+                        target.mkdir(mode=0o600)
+                    elif case == 'missing':
+                        files.pop('mediamtx.env')
+                    elif case == 'extra':
+                        files['../escape'] = target
+                    elif case == 'relative':
+                        files['rtsp-key.pem'] = Path('rtsp-key.pem')
+                    return files
+                with self.assertRaises(RuntimeError):
+                    lifecycle.configuration_arguments(SimpleNamespace(configuration_files=bad), {}, base / 'root', base)
+
+    def test_imported_and_managed_configuration_exact_permissions(self):
+        directory = SimpleNamespace(st_uid=0, st_gid=987, st_mode=stat.S_IFDIR | 0o750)
+        file = SimpleNamespace(st_uid=0, st_gid=987, st_mode=stat.S_IFREG | 0o640)
+        with patch.object(Path, 'lstat', side_effect=[directory] + [file] * 5) as inspect:
+            lifecycle.verify_config_permissions(Path('/installed'), 987)
+            self.assertEqual(inspect.call_count, 6)
+        for position in range(2, 6):
+            records = [directory] + [file] * 5
+            records[position] = SimpleNamespace(st_uid=0, st_gid=987, st_mode=stat.S_IFREG | 0o600)
+            with patch.object(Path, 'lstat', side_effect=records):
+                with self.assertRaisesRegex(RuntimeError, 'configuration permissions'):
+                    lifecycle.verify_config_permissions(Path('/installed'), 987)
+
+    def test_camera_declares_and_restarts_both_services(self):
+        source = SCRIPT.read_text()
+        for call in ("run('systemctl', 'enable', '--now', *SERVICES)",
+                     "run('systemctl', 'restart', *SERVICES)",
+                     "run('systemctl', 'disable', '--now', *SERVICES)"):
+            self.assertIn(call, source)
+        self.assertIn("for unit, pid in first_pids.items()", source)
+        self.assertIn('adapter.persisted(request, session, state, require)', source)
+        with patch.object(lifecycle, 'SERVICES', ('xcos.service', 'xcos-mediamtx.service')), \
+                patch.object(lifecycle.pwd, 'getpwnam', side_effect=KeyError), \
+                patch.object(lifecycle.grp, 'getgrnam', side_effect=KeyError), \
+                patch.object(lifecycle.os.path, 'lexists', return_value=False), \
+                patch.object(lifecycle, 'property_value', return_value='not-found') as inspect:
+            lifecycle.authority_preflight()
+        self.assertEqual(inspect.call_args_list,
+                         [unittest.mock.call('LoadState', 'xcos.service'),
+                          unittest.mock.call('LoadState', 'xcos-mediamtx.service')])
+
+
 class SharedAuthority(unittest.TestCase):
     def test_git_trust_is_scoped_to_one_exact_checkout_command(self):
         root = Path('/runner/exact-checkout')

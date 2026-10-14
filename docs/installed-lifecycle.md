@@ -40,6 +40,26 @@ The small adapter lives in the product's tracked `scripts` directory and provide
 
 The harness supplies the HTTPS request helper and authenticated administrator session. Add any temporary business credentials to `sensitive` for diagnostic redaction. XSCS's adapter demonstrates device creation, renaming and authorization.
 
+## XCOS companion and TLS inputs
+
+XCOS uses the same commands with product `xcos`. Its source-owned
+`stage-product.sh` stages the receipt-verified server and pinned MediaMTX payload.
+The candidate producer preserves the original vendor archive through normal
+package receipt generation. Cargo version comes from `[package]`; README is the
+product's original `README.md`.
+
+Before installation, the XCOS adapter's
+`configuration_files(config, root, input_directory)` prepares `rtsp-cert.pem`,
+`rtsp-key.pem` and `mediamtx.env` in the harness-created 0700 directory. Each file
+must be a single-link regular file with mode 0600. The harness supplies these as
+three `--configuration-file REL=SOURCE` arguments to the real installer; it never
+writes installed configuration directly. Installed imports and managed
+`mediamtx.yml` must be root-owned, service-group-readable 0640 files.
+
+Both `xcos.service` and `xcos-mediamtx.service` participate in startup, restart,
+stop and recorded-unit removal. This gate exercises the control plane and
+recordings-directory retention, not camera ingest or recorded video.
+
 ## Acceptance steps
 
 1. Verify the archive and exact source identity.

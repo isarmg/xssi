@@ -37,6 +37,8 @@ PRODUCTS = {
              ('workspace', 'package', 'version'), 'docs/server-release-readme.md'),
     'xszs': ('scripts/package-server-release.py', 'config/xszs.json.example',
              ('workspace', 'package', 'version'), 'docs/server-release-readme.md'),
+    'xcos': ('scripts/stage-product.sh', 'config/xcos.json.example',
+             ('package', 'version'), 'README.md'),
     'xocs': ('scripts/package-release.py', 'deploy/linux-x86_64/config.json.example',
              ('package', 'version'), 'README.md'),
 }
@@ -57,7 +59,7 @@ def environment():
              if not any(part in key.upper() for part in ('TOKEN', 'PASSWORD', 'SECRET', 'SIGNING', 'PRIVATE_KEY'))}
     value.update(GIT_NO_REPLACE_OBJECTS='1', PYTHONDONTWRITEBYTECODE='1')
     for key in ('XSSI_BUILD_METADATA_DIR', 'XSSI_BUILD_RECEIPT_DIR', 'XSSI_BUILD_SOURCE_REVISION',
-                'XSSI_IDENTITY_FILE', 'XSSI_SCHEMA_FILE', 'XSSI_FRONTEND_METADATA_FILE'):
+                'XSSI_IDENTITY_FILE', 'XSSI_SCHEMA_FILE', 'XSSI_FRONTEND_METADATA_FILE', 'XSSI_MEDIA_ARCHIVE'):
         value.pop(key, None)
     return value
 
@@ -157,36 +159,49 @@ def build_candidate(product, source, binary, metadata, output, *, installer=ROOT
     version = source_version(source, version_path)
     materials = read_metadata(metadata)
     digest, identity = validate_build(binary, materials, product, version, revision)
-    # Load only from the already-verified clean product source. These are the
-    # exact staging functions used by its annotated-tag-only formal packager.
-    spec = importlib.util.spec_from_file_location('product_release', source / staging_script)
-    product_release = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(product_release)
     epoch = int(git(source, 'show', '-s', '--format=%ct', revision))
     name = f'{product}-{version}-linux-x86_64'
     output.mkdir(mode=0o700)
     with tempfile.TemporaryDirectory(prefix='.candidate-', dir=output) as temporary:
         work = Path(temporary)
         stage = work / name
-        for directory in (stage, stage / 'bin', stage / 'share'):
-            directory.mkdir(mode=0o755)
-            directory.chmod(0o755)
-        product_release.stage_verified_server(binary, stage / 'bin' / product, revision)
-        product_release.stage_original_notices(stage / 'share', source=source)
         inputs = work / 'metadata'
         for relative, value in materials.items():
             write(inputs / relative, value)
-            if relative.startswith('contracts/'):
-                write(stage / 'share' / relative, value)
-        for suffix in ('state-contract', 'web-assets'):
-            write(stage / 'share' / f'{suffix}.json', materials[f'{product}-{suffix}.json'])
-        write(stage / 'config/config.json.example', package.bytes_regular(source / config_sample))
+        if product == 'xcos':
+            # The product owns its sole server/companion staging implementation.
+            # A subprocess export cannot propagate back: pass the original archive
+            # explicitly to the normal package producer below.
+            subprocess.run(['bash', '-euo', 'pipefail', '-c',
+                            'umask 022; source "$1"; stage_xcos_payload "$2" "$3" "$4" "$5"',
+                            'xcos-candidate-stage', str(source / staging_script), str(source),
+                            str(work), str(binary), revision], cwd=source, env=environment(),
+                           stdin=subprocess.DEVNULL, check=True)
+            (work / 'stage').rename(stage)
+        else:
+            # Load only the already-verified clean product source.
+            spec = importlib.util.spec_from_file_location('product_release', source / staging_script)
+            product_release = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(product_release)
+            for directory in (stage, stage / 'bin', stage / 'share'):
+                directory.mkdir(mode=0o755)
+                directory.chmod(0o755)
+            product_release.stage_verified_server(binary, stage / 'bin' / product, revision)
+            product_release.stage_original_notices(stage / 'share', source=source)
+            for relative, value in materials.items():
+                if relative.startswith('contracts/'):
+                    write(stage / 'share' / relative, value)
+            for suffix in ('state-contract', 'web-assets'):
+                write(stage / 'share' / f'{suffix}.json', materials[f'{product}-{suffix}.json'])
+            write(stage / 'config/config.json.example', package.bytes_regular(source / config_sample))
         write(stage / 'share/README.md', package.bytes_regular(source / readme))
         env = environment()
         env.update({'XSSI_SOURCE_REVISION': revision,
                     'XSSI_IDENTITY_FILE': str(inputs / f'{product}-identity.json'),
                     'XSSI_SCHEMA_FILE': str(inputs / f'{product}-schema.json'),
                     'XSSI_FRONTEND_METADATA_FILE': str(inputs / 'frontend.json')})
+        if product == 'xcos':
+            env['XSSI_MEDIA_ARCHIVE'] = str(work / 'media.tar.gz')
         subprocess.run(['bash', str(installer / 'scripts/build-package.sh'), product, str(source), str(stage)],
                        cwd=installer, env=env, stdin=subprocess.DEVNULL, check=True)
         verified = package.verify(stage)

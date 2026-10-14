@@ -231,6 +231,8 @@ class CandidateBoundaryTests(unittest.TestCase):
                      ('workspace', 'package', 'version'), 'docs/server-release-readme.md'),
             'xszs': ('scripts/package-server-release.py', 'config/xszs.json.example',
                      ('workspace', 'package', 'version'), 'docs/server-release-readme.md'),
+            'xcos': ('scripts/stage-product.sh', 'config/xcos.json.example',
+                     ('package', 'version'), 'README.md'),
             'xocs': ('scripts/package-release.py', 'deploy/linux-x86_64/config.json.example',
                      ('package', 'version'), 'README.md'),
         })
@@ -309,6 +311,65 @@ class CandidateBoundaryTests(unittest.TestCase):
         self.materials['xsos-identity.json'] = self.materials.pop('xszs-identity.json')
         with self.assertRaisesRegex(ValueError, 'missing exact build metadata: xszs-identity.json'):
             self.validate()
+
+    def test_xcos_runs_product_shell_staging_and_passes_original_archive(self):
+        # Execute the real candidate branch and shell call, with an explicitly
+        # synthetic product stager. No fixture is presented as an installed package.
+        source, installer, metadata = (self.root / name for name in ('source', 'installer', 'metadata'))
+        for path in (source / 'scripts', installer, metadata):
+            path.mkdir(parents=True)
+        (source / 'Cargo.toml').write_text('[package]\nversion="1.0.1"\n[workspace.package]\nversion="9.9.9"\n')
+        (source / 'README.md').write_bytes(b'original product readme')
+        (source / 'scripts/stage-product.sh').write_text(
+            'stage_xcos_payload() {\n'
+            'test "$1" = "$PWD"\n'
+            'test -f "$2/metadata/xcos-identity.json"\n'
+            'test -f "$2/metadata/contracts/install.json"\n'
+            'test "$4" = "' + self.revision + '"\n'
+            'mkdir -p "$2/stage/bin" "$2/stage/share"\n'
+            'cp "$3" "$2/stage/bin/xcos"\n'
+            'printf "original vendor archive fixture" > "$2/media.tar.gz"\n'
+            'export XSSI_MEDIA_ARCHIVE="$2/media.tar.gz"\n'
+            '}\n')
+        materials = {key.replace('xscs', 'xcos'): value.replace(b'xscs', b'xcos')
+                     for key, value in self.materials.items()}
+        identity = json.loads(materials['xcos-identity.json'])
+        for relative, value in materials.items():
+            candidate.write(metadata / relative, value)
+        self.receipt['identity']['product'] = 'xcos'
+        self.save_receipt()
+        actual_run = subprocess.run
+        producer_calls = []
+        def run(command, **kwargs):
+            if command[:2] == ['bash', '-euo']:
+                return actual_run(command, **kwargs)
+            self.assertEqual(command[:3], ['bash', str(installer / 'scripts/build-package.sh'), 'xcos'])
+            producer_calls.append(command)
+            env = kwargs['env']
+            stage = Path(command[-1])
+            original = Path(env['XSSI_MEDIA_ARCHIVE'])
+            self.assertEqual(original, stage.parent / 'media.tar.gz')
+            self.assertEqual(original.read_bytes(), b'original vendor archive fixture')
+            self.assertEqual(Path(env['XSSI_IDENTITY_FILE']).read_bytes(), materials['xcos-identity.json'])
+            self.assertEqual((stage / 'bin/xcos').read_bytes(), self.payload)
+            self.assertEqual((stage / 'share/README.md').read_bytes(), b'original product readme')
+            self.assertEqual(stage.stat().st_mode & 0o777, 0o755)
+            return subprocess.CompletedProcess(command, 0)
+        old_umask = os.umask(0o077)
+        try:
+            with patch.object(candidate, 'git', side_effect=lambda root, *args: self.revision if args[0] == 'rev-parse' else '1234'), \
+                    patch.object(candidate, 'verify_checkout'), \
+                    patch.object(candidate, 'verify_installer', return_value='b' * 40), \
+                    patch.object(candidate.subprocess, 'run', side_effect=run), \
+                    patch.object(candidate.package, 'verify', return_value={'identity': identity}):
+                archive = candidate.build_candidate('xcos', source, self.binary, metadata,
+                                                    self.root / 'output', installer=installer)
+        finally:
+            os.umask(old_umask)
+        self.assertEqual(len(producer_calls), 1)
+        self.assertTrue(archive.is_file())
+        self.assertEqual(archive.name, 'xcos-1.0.1-linux-x86_64.tar.gz')
+        self.assertIn(candidate.binary_digest(archive), (archive.parent / 'SHA256SUMS').read_text())
 
     def test_new_owned_staging_directories_have_exact_modes_with_private_umask(self):
         old = os.umask(0o077)

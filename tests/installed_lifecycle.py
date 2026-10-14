@@ -75,12 +75,41 @@ def verify_install_parent(parent):
 def verify_config_permissions(root, service_gid):
     # These server adapters declare no mutable configuration paths. Only the administrator
     # owns configuration; the service's primary group receives read access.
-    for relative, kind, mode in (('config', stat.S_ISDIR, 0o750),
-                                 ('config/config.json', stat.S_ISREG, 0o640)):
+    paths = [('config', stat.S_ISDIR, 0o750), ('config/config.json', stat.S_ISREG, 0o640)]
+    if PRODUCT == 'xcos':
+        paths.extend(('config/' + name, stat.S_ISREG, 0o640) for name in
+                     ('rtsp-cert.pem', 'rtsp-key.pem', 'mediamtx.env', 'mediamtx.yml'))
+    for relative, kind, mode in paths:
         info = (root / relative).lstat()
         require(kind(info.st_mode) and info.st_uid == 0
                 and info.st_gid == service_gid and stat.S_IMODE(info.st_mode) == mode,
                 'Installed read-only configuration permissions differ')
+
+
+def configuration_arguments(adapter, config, root, base):
+    """XCOS imports operator TLS material through the real installer only."""
+    if PRODUCT != 'xcos':
+        return []
+    directory = base / 'configuration-inputs'
+    directory.mkdir(mode=0o700)
+    files = adapter.configuration_files(config, root, directory)
+    info = directory.lstat()
+    require(stat.S_ISDIR(info.st_mode) and info.st_uid == os.geteuid()
+            and stat.S_IMODE(info.st_mode) == 0o700, 'Configuration input directory differs')
+    require(isinstance(files, dict)
+            and set(files) == {'rtsp-cert.pem', 'rtsp-key.pem', 'mediamtx.env'},
+            'XCOS requires exactly its declared TLS configuration imports')
+    arguments = []
+    for relative, source in sorted(files.items()):
+        source = Path(source)
+        require(source.is_absolute() and source.parent == directory,
+                'Configuration input must stay in its private directory')
+        info = source.lstat()
+        require(stat.S_ISREG(info.st_mode) and info.st_uid == os.geteuid()
+                and info.st_nlink == 1 and stat.S_IMODE(info.st_mode) == 0o600
+                and 0 < info.st_size <= 65536, 'Configuration input must be one private regular file')
+        arguments.extend(('--configuration-file', relative + '=' + str(source)))
+    return arguments
 
 
 def installation_observation(root):
@@ -331,10 +360,11 @@ def main():
     config_path.chmod(0o600)
     password = secrets.token_urlsafe(32)
     SECRETS.append(password)
+    imports = configuration_arguments(adapter, config, root, base)
     phase('install-and-initialize')
     result = json.loads(run('bash', str(package / 'install.sh'), '--package', str(package),
                            '--root', str(root), '--config', str(config_path), '--username', 'admin',
-                           '--json', input=(password + '\n').encode()))
+                           '--json', *imports, input=(password + '\n').encode()))
     require(result['status'] == 'installed' and result['services_started'] is False
             and result['state_checked'] is True and result['permissions_verified'] is True,
             'Installer did not confirm initialized, verified, stopped installation')
