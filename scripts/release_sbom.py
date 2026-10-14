@@ -61,7 +61,18 @@ def sha(value):
 
 def identity(info):
     return (info.st_dev, info.st_ino, info.st_mode, info.st_nlink, info.st_uid,
-            info.st_gid, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+            info.st_gid, info.st_size, info.st_mtime_ns, info.st_ctime_ns,
+            getattr(info, 'st_file_attributes', 0), getattr(info, 'st_reparse_tag', 0))
+
+
+def named_identity(info):
+    # Windows path stat reports creation time in ctime, while fstat can report
+    # metadata change time. Compare birthtime across these APIs; full fstat
+    # identity still checks change time before and after reading.
+    timestamp = info.st_birthtime_ns if os.name == 'nt' else info.st_ctime_ns
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_nlink, info.st_uid,
+            info.st_gid, info.st_size, info.st_mtime_ns, timestamp,
+            getattr(info, 'st_file_attributes', 0), getattr(info, 'st_reparse_tag', 0))
 
 
 def bounded(path, maximum):
@@ -74,7 +85,7 @@ def bounded(path, maximum):
                          getattr(os, 'O_NONBLOCK', 0) | getattr(os, 'O_BINARY', 0))
     try:
         before = os.fstat(descriptor)
-        if identity(before) != identity(named) or before.st_nlink != 1 or before.st_size > maximum:
+        if named_identity(before) != named_identity(named) or not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or before.st_size > maximum:
             raise ValueError('inventory authority requires a bounded single-link regular file')
         chunks = []
         size = 0
@@ -83,8 +94,10 @@ def bounded(path, maximum):
             size += len(chunk)
             if size > maximum:
                 raise ValueError('inventory authority exceeds its bound')
-        if size != before.st_size or identity(before) != identity(os.fstat(descriptor)) or identity(before) != identity(path.lstat()):
+        after_named = path.lstat()
+        if size != before.st_size or identity(before) != identity(os.fstat(descriptor)) or identity(named) != identity(after_named) or named_identity(before) != named_identity(after_named):
             raise ValueError('inventory authority changed during verification')
+        physical_directory(path.absolute().parent)
         return b''.join(chunks)
     finally:
         os.close(descriptor)
@@ -97,7 +110,7 @@ def digest(path):
     descriptor = os.open(path, os.O_RDONLY | getattr(os,'O_NOFOLLOW',0) | getattr(os,'O_NONBLOCK',0) | getattr(os,'O_BINARY',0))
     try:
         before = os.fstat(descriptor)
-        if identity(before)!=identity(named) or not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or before.st_size > MAX_BYTES:
+        if named_identity(before)!=named_identity(named) or not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or before.st_size > MAX_BYTES:
             raise ValueError('inventory requires a bounded single-link regular file')
         result = hashlib.sha256()
         total = 0
@@ -106,8 +119,10 @@ def digest(path):
             if total > MAX_BYTES:
                 raise ValueError('inventory file exceeds its bound')
             result.update(chunk)
-        if total != before.st_size or identity(before) != identity(os.fstat(descriptor)) or identity(before) != identity(Path(path).lstat()):
+        after_named = Path(path).lstat()
+        if total != before.st_size or identity(before) != identity(os.fstat(descriptor)) or identity(named) != identity(after_named) or named_identity(before) != named_identity(after_named):
             raise ValueError('release file changed while computing its inventory')
+        physical_directory(Path(path).absolute().parent)
         return result.hexdigest()
     finally:
         os.close(descriptor)

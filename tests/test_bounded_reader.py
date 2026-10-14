@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -19,13 +20,13 @@ class BoundedReaderTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.root=Path(temporary.name)
 
-    def observe(self,path,operation):
-        """Report original OS metadata only if a positive authority read fails."""
+    def observe(self,path,operation,report_windows_semantics=False):
+        """Report authority failures or the explicit Windows semantic fixture."""
         observations=[]
         original_fstat=os.fstat
         original_lstat=Path.lstat
         fields=('st_dev','st_ino','st_nlink','st_size','st_mtime_ns',
-                'st_ctime_ns','st_file_attributes','st_reparse_tag')
+                'st_ctime_ns','st_birthtime_ns','st_file_attributes','st_reparse_tag')
         def record(kind,info):
             observations.append({'kind':kind,'metadata':{name:getattr(info,name,None) for name in fields}})
             return info
@@ -36,7 +37,11 @@ class BoundedReaderTests(unittest.TestCase):
             return record('named',info) if candidate==path else info
         with patch.object(release_sbom.os,'fstat',side_effect=fstat), \
              patch.object(Path,'lstat',lstat):
-            try:return operation()
+            try:
+                result=operation()
+                if report_windows_semantics and os.name=='nt':
+                    print('bounded-reader-stable-windows-semantics '+json.dumps(observations),file=sys.stderr)
+                return result
             except Exception:
                 print('bounded-reader-stat-observation '+json.dumps(observations),file=sys.stderr)
                 raise
@@ -59,6 +64,35 @@ class BoundedReaderTests(unittest.TestCase):
         self.assertEqual(self.observe(file,lambda:bounded(file,len(contents))),contents)
         self.assertEqual(self.observe(file,lambda:gradle_sbom.bytes_regular(file,len(contents))),contents)
         self.assertEqual(self.observe(file,lambda:release_sbom.digest(file)),hashlib.sha256(contents).hexdigest())
+
+    def test_stable_current_file_after_metadata_change_is_read_and_hashed(self):
+        import hashlib
+        contents=b'public file fixture'
+        file=self.root/'stable-after-metadata-change';file.write_bytes(contents)
+        original=file.stat()
+        time.sleep(.02)
+        os.utime(file,ns=(original.st_atime_ns,original.st_mtime_ns))
+        self.assertEqual(self.observe(file,lambda:bounded(file,len(contents)),report_windows_semantics=True),contents)
+        self.assertEqual(self.observe(file,lambda:release_sbom.digest(file)),hashlib.sha256(contents).hexdigest())
+
+    def test_same_size_rewrite_with_restored_mtime_during_read_is_rejected(self):
+        contents=b'public file fixture'
+        file=self.root/'same-size-rewrite';file.write_bytes(contents)
+        original=file.stat();original_read=os.read;changed=False
+        def rewrite_after_read(descriptor,count):
+            nonlocal changed
+            data=original_read(descriptor,count)
+            if data and not changed:
+                changed=True
+                time.sleep(.02)
+                file.write_bytes(b'Public file fixture')
+                os.utime(file,ns=(original.st_atime_ns,original.st_mtime_ns))
+            return data
+        with patch.object(release_sbom.os,'read',side_effect=rewrite_after_read):
+            with self.assertRaisesRegex(ValueError,'changed'):bounded(file,len(contents))
+        self.assertTrue(changed)
+        self.assertEqual(file.stat().st_size,len(contents))
+        self.assertEqual(file.stat().st_mtime_ns,original.st_mtime_ns)
 
     def test_directory_and_actual_hardlink_are_rejected(self):
         with self.assertRaises(ValueError):bounded(self.root,1024)
