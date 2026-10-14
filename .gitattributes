@@ -1,0 +1,2 @@
+# Keep the original Maven material byte-for-byte on every test platform.
+tests/fixtures/maven/guava-parent-33.3.1-android.pom -text

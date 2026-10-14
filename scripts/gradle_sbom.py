@@ -118,8 +118,14 @@ def pom_license(group,name,version,repository,download,visited=()):
     properties={}
     container=node(root,'properties')
     if container is not None:
-        properties={child.tag.rsplit('}',1)[-1]:child.text.strip() for child in container if child.text}
-        if len(properties)!=len(list(container)):raise ValueError('Maven metadata properties are repeated or empty')
+        for child in container:
+            key=child.tag.rsplit('}',1)[-1]
+            if key in properties or len(child):
+                raise ValueError('Maven metadata properties are repeated or structured')
+            # Maven scalar properties may be explicitly empty, e.g. Guava's
+            # optional test JVM flags. Retain them during substitution; the
+            # consumed identity and license fields still require real values.
+            properties[key]=(child.text or '').strip()
     properties.update({'project.groupId':group,'project.artifactId':name,'project.version':version,
                        'pom.groupId':group,'pom.artifactId':name,'pom.version':version})
     def resolved(value):

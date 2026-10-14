@@ -139,6 +139,57 @@ print(value.hex())
         metadata={value['name']:value['value'] for value in component['properties']}
         self.assertEqual(len(json.loads(metadata['maven-license-metadata'])),2)
 
+    def test_original_guava_parent_keeps_unrelated_empty_properties_and_license_source(self):
+        # Actual current XSZC runtime parent, retrieved from Maven Central:
+        # https://repo.maven.apache.org/maven2/com/google/guava/guava-parent/33.3.1-android/guava-parent-33.3.1-android.pom
+        raw=(Path(__file__).parent/'fixtures/maven/guava-parent-33.3.1-android.pom').read_bytes()
+        self.assertEqual(hashlib.sha256(raw).hexdigest(),
+                         '6e11986ea7250b51f847157e2dc937f32a306804dfce0007a5e81ddb9b95c579')
+        source=self.repository+'com/google/guava/guava-parent/33.3.1-android/guava-parent-33.3.1-android.pom'
+        self.remote[source]=raw
+        declared,metadata=gradle_sbom.pom_license('com.google.guava','guava-parent',
+                                                 '33.3.1-android',self.repository,self.fetch)
+        self.assertEqual([location for label,location in declared],
+                         ['https://www.apache.org/licenses/LICENSE-2.0.txt'])
+        self.assertEqual(metadata,[(source,hashlib.sha256(raw).hexdigest())])
+
+    def test_duplicate_empty_properties_and_nested_property_xml_remain_rejected(self):
+        pom=next(url for url in self.remote if url.endswith('.pom'))
+        original=self.remote[pom]
+        for properties in (b'<empty/><empty/>',b'<empty/><empty>value</empty>',
+                           b'<same>value</same><same>another</same>',
+                           b'<nested><value>ambiguous</value></nested>'):
+            with self.subTest(properties=properties):
+                self.remote[pom]=original.replace(b'<licenses>',
+                    b'<properties>'+properties+b'</properties><licenses>')
+                with self.assertRaisesRegex(ValueError,'properties are repeated or structured'):
+                    gradle_sbom.pom_license(self.group,self.name,self.version,self.repository,self.fetch)
+
+    def test_empty_consumed_identity_or_license_fields_cannot_borrow_material(self):
+        pom=next(url for url in self.remote if url.endswith('.pom'))
+        original=self.remote[pom].replace(b'<licenses>',
+            b'<properties><empty/></properties><licenses>')
+        replacements=((b'<groupId>org.example</groupId>',b'<groupId>${empty}</groupId>'),
+                      (b'<artifactId>runtime</artifactId>',b'<artifactId>${empty}</artifactId>'),
+                      (b'<version>1.2.3</version>',b'<version>${empty}</version>'),
+                      (b'<name>Fixture License</name>',b'<name>${empty}</name>'),
+                      (b'<url>https://upstream.example.invalid/LICENSE.txt</url>',b'<url>${empty}</url>'),
+                      (b'<url>https://upstream.example.invalid/LICENSE.txt</url>',b'<url>${missing}</url>'))
+        for before,after in replacements:
+            with self.subTest(field=after):
+                self.remote[pom]=original.replace(before,after)
+                with self.assertRaisesRegex(ValueError,'identity|missing its actual upstream|could not be resolved'):
+                    gradle_sbom.pom_license(self.group,self.name,self.version,self.repository,self.fetch)
+        parent=b'<parent><groupId>org.example</groupId><artifactId>parent</artifactId><version>9.0.0</version></parent>'
+        for field,value in ((b'groupId',b'org.example'),(b'artifactId',b'parent'),(b'version',b'9.0.0')):
+            with self.subTest(parent_field=field):
+                changed=parent.replace(b'<'+field+b'>'+value+b'</'+field+b'>',
+                                       b'<'+field+b'>${empty}</'+field+b'>')
+                self.remote[pom]=(b'<project><groupId>org.example</groupId><artifactId>runtime</artifactId>'
+                    b'<version>1.2.3</version><properties><empty/></properties>'+changed+b'</project>')
+                with self.assertRaisesRegex(ValueError,'parent coordinates are unresolved'):
+                    gradle_sbom.pom_license(self.group,self.name,self.version,self.repository,self.fetch)
+
     def test_mismatched_or_repeated_pom_identity_cannot_borrow_upstream_licenses(self):
         pom=next(url for url in self.remote if url.endswith('.pom'))
         original=self.remote[pom]
