@@ -13,6 +13,7 @@ import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 import zipfile
+from release_sbom import bounded
 
 MAX_ARTIFACT=128*1024*1024
 MAX_DOCUMENT=2*1024*1024
@@ -35,7 +36,6 @@ def https(url):
 
 
 def bytes_regular(path,maximum):
-    from release_sbom import bounded
     return bounded(path,maximum)
 
 

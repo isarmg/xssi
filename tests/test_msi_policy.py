@@ -115,6 +115,8 @@ class MsiPolicyTests(unittest.TestCase):
             'registry':[['GeneratedLocation',2,'Software\\sarmg\\fixture','InstallLocation','[INSTALLFOLDER]','ServiceComponent'],
                         ['GeneratedEnabled',2,'Software\\sarmg\\fixture','Enabled','#1','ServiceComponent']],
             'environment':[['MachinePath','=-*PATH','[~];[INSTALLFOLDER]','ServiceComponent']],
+            'ui_checkboxes':[['LicenseAccepted','1'],['WIXUI_EXITDIALOGOPTIONALCHECKBOX','1']],
+            'ui_listboxes':[],
             'remove_files':[],
             'service_config':[['FixtureSvc','ServiceComponent',1,'restart','restart','restart',1,60,'','']],
             'components':[['ServiceComponent','01234567-0123-0123-0123-012345678901','INSTALLFOLDER',256,'','ClientExe']],
@@ -151,6 +153,17 @@ class MsiPolicyTests(unittest.TestCase):
             self.check(policy,tables)
             tables['services'][0][5]^=32768
             with self.assertRaisesRegex(ValueError,'services effects'):self.check(policy,tables)
+
+    def test_ui_data_cannot_add_controlled_properties_or_source_undeclared_values(self):
+        policy,tables=self.fixture()
+        for field,rows in (('ui_checkboxes',[['INSTALLFOLDER','[WindowsFolder]']]),
+                           ('ui_checkboxes',[['LicenseAccepted','0'],['WIXUI_EXITDIALOGOPTIONALCHECKBOX','1']]),
+                           ('ui_listboxes',[['INSTALLFOLDER',1,'[WindowsFolder]','Undeclared path']])):
+            altered=copy.deepcopy(tables);altered[field]=rows
+            with self.subTest(field=field,rows=rows),self.assertRaisesRegex(ValueError,'fixed selected SDK source'):
+                self.check(policy,altered)
+        with self.assertRaisesRegex(ValueError,'selected native installer UI'):
+            self.fixture(AUTHORING.replace('InstallDirectory="INSTALLFOLDER"','InstallDirectory="FOREIGNROOT"'))
 
     def test_unknown_actions_or_changed_privileges_identity_and_native_services_fail(self):
         policy,tables=self.fixture()

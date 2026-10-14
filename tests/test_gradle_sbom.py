@@ -4,6 +4,7 @@ import io
 import json
 from pathlib import Path
 import stat
+import subprocess
 import tempfile
 import sys
 import unittest
@@ -23,6 +24,27 @@ def archive(entries):
 
 
 class GradleRuntimeTests(unittest.TestCase):
+    def test_isolated_consumer_loader_can_restore_search_path_before_binary_read(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary).resolve(strict=True)
+            path=root/'runtime.nupkg';body=b'actual isolated binary\r\n\x1a fixture';path.write_bytes(body)
+            script='''import importlib.util, pathlib, sys
+module_path=pathlib.Path(sys.argv[1])
+previous=list(sys.path)
+sys.path.insert(0,str(module_path.parent))
+spec=importlib.util.spec_from_file_location("isolated_runtime",module_path)
+module=importlib.util.module_from_spec(spec)
+try:spec.loader.exec_module(module)
+finally:sys.path[:]=previous
+assert str(module_path.parent) not in sys.path
+value=module.bytes_regular(pathlib.Path(sys.argv[2]),1024)
+print(value.hex())
+'''
+            result=subprocess.run([sys.executable,'-I','-c',script,str(Path(gradle_sbom.__file__)),str(path)],
+                capture_output=True,text=True,timeout=30)
+            self.assertEqual(result.returncode,0,result.stderr)
+            self.assertEqual(result.stdout.strip(),body.hex())
+
     def setUp(self):
         self.temporary=tempfile.TemporaryDirectory(prefix='xssi-gradle-runtime-')
         self.addCleanup(self.temporary.cleanup)

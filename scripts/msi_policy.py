@@ -172,7 +172,8 @@ def create(source,stage,version,revision):
     identity['Version']=version
     actions=[action(dict(node.attrib)) for node in tree.iter() if name(node)=='CustomAction']
     ui=[node for node in tree.iter() if node.tag=='{'+UI+'}WixUI']
-    if len(ui)!=1 or ui[0].get('Id')!='WixUI_InstallDir':raise ValueError('review the exact selected native installer UI')
+    if len(ui)!=1 or ui[0].get('Id')!='WixUI_InstallDir' or ui[0].get('InstallDirectory')!='INSTALLFOLDER':raise ValueError('review the exact selected native installer UI')
+    attributes(ui[0],('Id','InstallDirectory'))
     actions += [[ 'WixUIPrintEula_X64',65,'WixUiCa_X64','PrintEula'],['WixUIValidatePath_X64',65,'WixUiCa_X64','ValidatePath']]
     extensions=[node for node in tree.iter() if node.tag.startswith('{'+UTIL+'}')]
     if any(name(node)!='ServiceConfig' for node in extensions):raise ValueError('review unknown installer extension effects')
@@ -195,7 +196,11 @@ def create(source,stage,version,revision):
                             'condition':'NOT REMOVE~="ALL" AND VersionNT > 400'})
     policy={'format_version':1,'source_revision':revision,'source_sha256':hashlib.sha256(raw).hexdigest(),
             'package':identity,'installer_version':int(product.get('InstallerVersion','500')),'platform':'x64',
-            'actions':sorted(actions),'constraints':constraints,**effects(tree)}
+            'actions':sorted(actions),'constraints':constraints,
+            # Exact WiX 4.0.6 ExitDialog/LicenseAgreementDlg data declarations.
+            # MsiRMFilesInUse has an empty ListBox populated at runtime by MSI.
+            'ui_checkboxes':[['LicenseAccepted','1'],['WIXUI_EXITDIALOGOPTIONALCHECKBOX','1']],
+            'ui_listboxes':[],**effects(tree)}
     material=Path(stage)/'share/msi-authoring.wxs'
     material.parent.mkdir(parents=True,exist_ok=True)
     with material.open('xb') as output:output.write(raw)
@@ -207,7 +212,7 @@ def create(source,stage,version,revision):
 
 
 def validate(policy,tables,identity):
-    sbom.fields(policy,['format_version','source_revision','source_sha256','package','installer_version','platform','actions','constraints','services','service_controls','registry','environment','remove_files','service_config','service_components','directories'])
+    sbom.fields(policy,['format_version','source_revision','source_sha256','package','installer_version','platform','actions','constraints','services','service_controls','registry','environment','remove_files','service_config','service_components','directories','ui_checkboxes','ui_listboxes'])
     if policy['format_version']!=1 or policy['source_revision']!=identity['source_revision']:
         raise ValueError('MSI policy differs from its exact current source identity')
     properties=dict(tables['properties'])
@@ -222,6 +227,9 @@ def validate(policy,tables,identity):
     names=tables['table_names']
     if len(set(names))!=len(names) or set(names)-ALLOWED_TABLES:
         raise ValueError('MSI contains an unreviewed installer effects table')
+    for field in ('ui_checkboxes','ui_listboxes'):
+        if sorted_rows(tables[field])!=policy[field]:
+            raise ValueError('MSI '+field+' data differs from the fixed selected SDK source')
     services=[[row[0],row[1],row[2],int(row[3]),int(row[4]),int(row[5]),*row[6:]] for row in tables['services']]
     controls=[[row[0],row[1],int(row[2]),row[3],int(row[4] or '1'),row[5]] for row in tables['service_controls']]
     registry=[[int(row[1]),*row[2:]] for row in tables['registry']]

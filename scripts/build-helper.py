@@ -11,6 +11,7 @@ import tarfile
 import tempfile
 import tomllib
 import package
+import release_sbom
 import sbom
 import sqlite_receipt
 
@@ -57,6 +58,91 @@ def build_environment():
 
 def verify_resolution(before,after):
     if packages(before)!=packages(after):raise ValueError('immutable helper dependency graph changed')
+
+def ensure_external_receipt(stage):
+    """Create the producer's empty receipt once; preserve validated contributions."""
+    stage=release_sbom.physical_directory(stage)
+    directory=release_sbom.physical_directory(stage/'share')
+    path=directory/'external-components.json'
+    try:
+        descriptor=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|getattr(os,'O_NOFOLLOW',0),0o644)
+    except FileExistsError:
+        pass
+    else:
+        with os.fdopen(descriptor,'wb') as output:
+            if os.name=='nt':path.chmod(0o644)
+            else:os.fchmod(output.fileno(),0o644)
+            output.write(b'{"format_version":1,"runtime_roots":[],"components":[]}\n')
+            output.flush();os.fsync(output.fileno())
+    data=release_sbom.load(path)
+    release_sbom.fields(data,['format_version','runtime_roots','components'])
+    if type(data['format_version'])is not int or data['format_version']!=1:
+        raise ValueError('external inventory has a different current format')
+
+    def collection(value,*,nonempty=False):
+        if not isinstance(value,list) or len(value)>release_sbom.MAX_FILES or (nonempty and not value):
+            raise ValueError('external inventory collection is invalid or exceeds its bound')
+        return value
+
+    inventory={}
+    def bound_files(values,*,nonempty=True):
+        seen=set()
+        for item in collection(values,nonempty=nonempty):
+            release_sbom.fields(item,['path','sha256','archive_entry'])
+            name=release_sbom.relative(item['path']);release_sbom.sha(item['sha256'])
+            entry=item['archive_entry']
+            if entry is not None:release_sbom.relative(entry)
+            key=(name,entry)
+            if key in seen:raise ValueError('external inventory repeats a file binding')
+            seen.add(key)
+            if name not in inventory:inventory[name]=release_sbom.digest(stage/name)
+            release_sbom.verify_file(item,stage,inventory)
+
+    refs=set()
+    for binding in collection(data['runtime_roots']):
+        release_sbom.fields(binding,['ref','files'])
+        ref=release_sbom.text(binding['ref'])
+        if ref in refs:raise ValueError('external inventory repeats a runtime root')
+        refs.add(ref);bound_files(binding['files'])
+    for item in collection(data['components']):
+        release_sbom.fields(item,['ref','type','name','version','source','licenses','delivery','files','dependencies'],['embedding'])
+        ref=release_sbom.text(item['ref'])
+        if ref in refs:raise ValueError('external inventory repeats a component identity')
+        refs.add(ref)
+        release_sbom.text(item['name']);release_sbom.text(item['version'])
+        delivery=item['delivery']
+        if delivery not in ('file','embedded','platform') or item['type'] not in ('application','library','data'):
+            raise ValueError('external inventory component identity or delivery is invalid')
+        release_sbom.source(item['source'],delivery=='platform')
+        children=[release_sbom.text(value) for value in collection(item['dependencies'])]
+        if len(set(children))!=len(children):raise ValueError('external inventory repeats a dependency')
+        licenses=collection(item['licenses'],nonempty=delivery!='platform')
+        for license_ in licenses:
+            release_sbom.fields(license_,['name','path','sha256'])
+            release_sbom.text(license_['name'])
+            name=release_sbom.relative(license_['path']);expected=release_sbom.sha(license_['sha256'])
+            if release_sbom.digest(stage/name)!=expected or (stage/name).stat().st_size==0:
+                raise ValueError('external inventory upstream license differs from its receipt')
+        if delivery=='platform':
+            if collection(item['files']) or 'embedding'in item:
+                raise ValueError('platform prerequisite cannot claim delivered files')
+            continue
+        bound_files(item['files'])
+        if 'embedding'in item or (delivery=='embedded' and any(value['archive_entry']is None for value in item['files'])):
+            if delivery!='embedded':raise ValueError('build inputs require embedded delivery')
+            embed=item.get('embedding')
+            release_sbom.fields(embed,['kind','source_files','target_files'],['input_root'])
+            if embed['kind']not in ('static-link','compiled-resource') or embed.get('input_root','build')not in ('stage','build'):
+                raise ValueError('external inventory embedding is invalid')
+            for value in collection(embed['source_files'],nonempty=True):
+                release_sbom.fields(value,['path','sha256'])
+                name=release_sbom.relative(value['path']);expected=release_sbom.sha(value['sha256'])
+                if embed.get('input_root')=='stage' and release_sbom.digest(stage/name)!=expected:
+                    raise ValueError('retained embedded input differs from its receipt')
+            if embed['target_files']!=item['files']:
+                raise ValueError('external inventory embedding target differs')
+    release_sbom.physical_directory(directory)
+    return path
 
 def build(args):
     if args.product not in PRODUCTS:raise ValueError('unsupported product')
@@ -135,6 +221,7 @@ def build(args):
         sbom.inventory(snapshot,product_path/'Cargo.toml',args.product,None,product_environment,args.stage,'server',[(snapshot,revision)])
         for manifest in (helper/'Cargo.lock',snapshot/'Cargo.lock'):
             subprocess.run(['cargo','audit','--deny','yanked','--file',str(manifest)],cwd=ROOT,check=True,env=build_environment())
+        ensure_external_receipt(args.stage)
         native=[sqlite_receipt.record(helper,args.stage,'setup','libexec/setup'),sqlite_receipt.record(snapshot,args.stage,'server',f'bin/{args.product}')]
         sqlite_receipt.merge(args.stage,native,[(args.stage/'share/setup-sbom.cdx.json','libexec/setup'),(args.stage/'share/server-sbom.cdx.json',f'bin/{args.product}')])
         licenses=args.stage/'share/licenses';licenses.mkdir(exist_ok=True)
