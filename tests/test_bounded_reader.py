@@ -23,8 +23,11 @@ class BoundedReaderTests(unittest.TestCase):
         file.write_bytes(b'public file fixture')
         self.assertEqual(bounded(file,19),b'public file fixture')
         with self.assertRaises(ValueError):bounded(file,18)
-        file.write_bytes(b'')
-        self.assertEqual(bounded(file,0),b'')
+        # Empty-file authority is an independent immutable input. Do not mix
+        # the regular-file bounds case with a same-inode truncation case.
+        empty=self.root/'empty'
+        empty.write_bytes(b'')
+        self.assertEqual(bounded(empty,0),b'')
 
     def test_actual_binary_bytes_do_not_translate_crlf_or_treat_control_z_as_eof(self):
         import hashlib
