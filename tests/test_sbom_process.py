@@ -13,6 +13,14 @@ import sbom
 
 
 class DependencyToolTests(unittest.TestCase):
+    @unittest.skipIf(os.name=='nt','POSIX procfs may report ESRCH while a terminated process disappears')
+    def test_exit_observer_handles_procfs_disappearance_but_preserves_unresolved_access(self):
+        self.assertTrue(process_alive(os.getpid()))
+        with mock.patch.object(Path,'read_text',side_effect=ProcessLookupError(3,'No such process')):
+            self.assertFalse(process_alive(os.getpid()))
+        with mock.patch.object(Path,'read_text',side_effect=PermissionError(13,'Permission denied')):
+            with self.assertRaises(PermissionError):process_alive(os.getpid())
+
     def test_stream_to_file_enforces_bound_before_writing_and_preserves_preexisting_files(self):
         with tempfile.TemporaryDirectory(prefix='xssi-dependency-stream-') as temporary:
             root=Path(temporary);path=root/'payload.cpio'
@@ -145,7 +153,7 @@ def process_alive(pid):
     try:
         state=(Path('/proc')/str(pid)/'status').read_text()
         return not any(line.startswith('State:') and ('Z' in line or 'X' in line) for line in state.splitlines())
-    except FileNotFoundError:
+    except (FileNotFoundError,ProcessLookupError):
         return False
 
 

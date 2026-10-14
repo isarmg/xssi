@@ -16,7 +16,7 @@ CORE='http://wixtoolset.org/schemas/v4/wxs'
 STANDARD_DIRECTORIES={'TARGETDIR':'SourceDir','ProgramFiles64Folder':'PFiles64','CommonAppDataFolder':'CommApp','ProgramMenuFolder':'PMenu'}
 # Current native authoring uses these standard payload/UI tables. Any other
 # table needs an explicit, reviewed effects contract before it may be shipped.
-ALLOWED_TABLES=set('ActionText AdminExecuteSequence AdminUISequence AdvtExecuteSequence AppSearch Binary Component Control ControlCondition ControlEvent CustomAction Dialog Directory Environment Error EventMapping Feature FeatureComponents File InstallExecuteSequence InstallUISequence LaunchCondition Media MsiFileHash Property RadioButton Registry RegLocator RemoveFile ServiceControl ServiceInstall TextStyle UIText Upgrade Wix4ServiceConfig _Validation'.split())
+ALLOWED_TABLES=set('ActionText AdminExecuteSequence AdminUISequence AdvtExecuteSequence AppSearch Binary CheckBox Component Control ControlCondition ControlEvent CustomAction Dialog Directory Environment Error EventMapping Feature FeatureComponents File InstallExecuteSequence InstallUISequence LaunchCondition ListBox Media MsiFileHash Property RadioButton Registry RegLocator RemoveFile ServiceControl ServiceInstall TextStyle UIText Upgrade Wix4ServiceConfig _Validation'.split())
 
 
 def name(node):return node.tag.rsplit('}',1)[-1]
@@ -78,7 +78,7 @@ def effects(tree):
             row=[node.get('Id'),node.get('Name'),node.get('DisplayName',''),
                  {'ownProcess':16,'shareProcess':32}[node.get('Type')]+(256 if boolean(node,'Interactive','no') else 0),
                  {'auto':2,'demand':3,'disabled':4}[node.get('Start')],
-                 {'ignore':0,'normal':1,'severe':2,'critical':3}[node.get('ErrorControl')]+(32768 if boolean(node,'Vital','yes') else 0),
+                 {'ignore':0,'normal':1,'severe':2,'critical':3}[node.get('ErrorControl')]+(32768 if boolean(node,'Vital','no') else 0),
                  node.get('LoadOrderGroup',''),'',node.get('Account',''),node.get('Password',''),
                  node.get('Arguments',''),component.get('Id'),node.get('Description','')]
             result['services'].append(row)

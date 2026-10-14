@@ -99,7 +99,7 @@ class MsiPolicyTests(unittest.TestCase):
         # Literal Windows Installer table evidence checks the translation rather
         # than deriving expected rows from the policy implementation itself.
         tables={
-            'table_names':['Property','CustomAction','InstallExecuteSequence','File','Component','Directory','ServiceInstall','ServiceControl','Registry','Environment','Wix4ServiceConfig'],
+            'table_names':['Property','CustomAction','InstallExecuteSequence','File','Component','Directory','ServiceInstall','ServiceControl','Registry','Environment','Wix4ServiceConfig','CheckBox','ListBox'],
             'properties':[['ProductName','fixture'],['Manufacturer','sarmg'],['UpgradeCode','{01234567-0123-0123-0123-012345678901}'],['ProductVersion','1.0.0'],['ALLUSERS','1']],
             'actions':[['PrepareSetup',3602,'ClientExe','installer prepare-setup'],
                        ['WixUIPrintEula_X64',65,'WixUiCa_X64','PrintEula'],['WixUIValidatePath_X64',65,'WixUiCa_X64','ValidatePath'],
@@ -109,7 +109,7 @@ class MsiPolicyTests(unittest.TestCase):
             'sequence':[['InstallFiles','',200],['PrepareSetup','NOT REMOVE~="ALL"',300],['InstallServices','',400],
                         ['Wix4SchedServiceConfig_X64','NOT REMOVE~="ALL" AND VersionNT > 400',500]],
             'other_sequences':[],
-            'services':[['SvcInstall','FixtureSvc','Fixture',16,3,32769,'','','NT AUTHORITY\\LocalService','',
+            'services':[['SvcInstall','FixtureSvc','Fixture',16,3,1,'','','NT AUTHORITY\\LocalService','',
                          '--windows-service --config "[CommonAppDataFolder]Fixture"','ServiceComponent','Fixture service description']],
             'service_controls':[['SvcControl','FixtureSvc',162,'',1,'ServiceComponent']],
             'registry':[['GeneratedLocation',2,'Software\\sarmg\\fixture','InstallLocation','[INSTALLFOLDER]','ServiceComponent'],
@@ -140,6 +140,17 @@ class MsiPolicyTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'identity'):self.check(policy,tables)
         with self.assertRaisesRegex(ValueError,'valid upgrade-family GUID'):
             self.fixture(AUTHORING.replace('UpgradeCode="01234567-0123-0123-0123-012345678901"','UpgradeCode="invalid-family"'))
+
+    def test_service_vital_defaults_to_current_wix_no_and_explicit_values_remain_bound(self):
+        for declared,expected in ((None,1),('no',1),('yes',32769)):
+            source=AUTHORING
+            if declared is not None:source=source.replace('ErrorControl="normal" Account=', 'ErrorControl="normal" Vital="'+declared+'" Account=')
+            policy,tables=self.fixture(source)
+            self.assertEqual(policy['services'][0][5],expected)
+            tables['services'][0][5]=expected
+            self.check(policy,tables)
+            tables['services'][0][5]^=32768
+            with self.assertRaisesRegex(ValueError,'services effects'):self.check(policy,tables)
 
     def test_unknown_actions_or_changed_privileges_identity_and_native_services_fail(self):
         policy,tables=self.fixture()
