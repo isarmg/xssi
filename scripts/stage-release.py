@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 from pathlib import Path, PurePosixPath
+import stat
 import sys
 import tarfile
 import tempfile
@@ -69,6 +70,80 @@ def copy(source,destination,mode):
         out.write(raw);out.flush();os.fsync(out.fileno());os.fchmod(out.fileno(),mode)
 
 
+def copy_compiler_artifact(messages,source,target,destination,version,package_id):
+    """Seal one freshly compiled intermediate before treating it as delivery."""
+    source=release_sbom.physical_directory(source)
+    target=release_sbom.physical_directory(target)
+    package=tomllib.loads(release_manifest.bounded(source/'Cargo.toml',1024*1024).decode('utf-8'))['package']
+    if package.get('name')!='xssi' or package.get('version')!=version:
+        raise ValueError('compiler source package version differs')
+    information=target.lstat()
+    if information.st_uid!=os.geteuid() or stat.S_IMODE(information.st_mode)!=0o700:
+        raise ValueError('compiler output target is not its producer-owned private directory')
+    expected=target/TARGET/'release/setup'
+    artifacts=[];finished=False
+    for line in messages.decode('utf-8').splitlines():
+        if len(line)>1024*1024:raise ValueError('compiler artifact message exceeds its bound')
+        value=json.loads(line)
+        if value.get('reason')=='build-finished':
+            if finished or value.get('success') is not True:raise ValueError('compiler build completion differs')
+            finished=True
+        if value.get('reason')=='compiler-artifact' and value.get('executable') is not None:
+            artifacts.append(value)
+    if not finished or len(artifacts)!=1:raise ValueError('compiler did not report exactly one actual helper artifact')
+    artifact=artifacts[0];profile=artifact.get('profile',{});binary=artifact.get('target',{})
+    if (not isinstance(package_id,str) or not package_id.startswith('path+'+source.as_uri()+'#')
+            or artifact.get('package_id')!=package_id
+            or Path(artifact.get('manifest_path',''))!=source/'Cargo.toml'
+            or binary.get('name')!='setup' or binary.get('kind')!=['bin']
+            or binary.get('crate_types')!=['bin'] or Path(binary.get('src_path',''))!=source/'src/main.rs'
+            or profile.get('test') is not False or profile.get('debug_assertions') is not False
+            or profile.get('opt_level')!='3' or artifact.get('fresh') is not False
+            or artifact.get('executable')!=str(expected) or artifact.get('filenames')!=[str(expected)]):
+        raise ValueError('compiler helper identity, profile, target or fresh source differs')
+    release_sbom.physical_directory(expected.parent)
+    named=expected.lstat()
+    descriptor=os.open(expected,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+    output=None;created=None;complete=False
+    try:
+        before=os.fstat(descriptor)
+        if (not stat.S_ISREG(before.st_mode) or before.st_uid!=os.geteuid()
+                or not before.st_mode&0o111 or before.st_mode&0o022 or before.st_nlink not in (1,2)
+                or before.st_size>release_sbom.MAX_BYTES
+                or release_sbom.identity(before)!=release_sbom.identity(named)):
+            raise ValueError('fresh compiler artifact is not a bounded controlled regular binary')
+        destination=Path(destination);destination.parent.mkdir(mode=0o755,parents=True,exist_ok=True)
+        release_sbom.physical_directory(destination.parent)
+        output=os.open(destination,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o755)
+        created=os.fstat(output);total=0
+        while chunk:=os.read(descriptor,min(65536,release_sbom.MAX_BYTES+1-total)):
+            total+=len(chunk)
+            if total>release_sbom.MAX_BYTES:raise ValueError('compiler artifact exceeds its byte bound')
+            remaining=memoryview(chunk)
+            while remaining:
+                written=os.write(output,remaining)
+                if written<=0:raise OSError('compiler artifact copy did not progress')
+                remaining=remaining[written:]
+        if (total!=before.st_size or release_sbom.identity(before)!=release_sbom.identity(os.fstat(descriptor))
+                or release_sbom.identity(named)!=release_sbom.identity(expected.lstat())):
+            raise ValueError('compiler artifact changed while being sealed')
+        release_sbom.physical_directory(expected.parent)
+        os.fchmod(output,0o755);os.fsync(output)
+        if os.fstat(output).st_nlink!=1:raise ValueError('sealed compiler artifact has more than one link')
+        release_sbom.digest(destination)
+        complete=True
+        return {'package':'xssi','version':version,'bin':'setup','profile':'release','target':TARGET,'fresh':False}
+    finally:
+        os.close(descriptor)
+        if output is not None:
+            os.close(output)
+            if not complete:
+                named_destination=destination.lstat()
+                if (named_destination.st_dev,named_destination.st_ino)!=(created.st_dev,created.st_ino):
+                    raise RuntimeError('failed compiler output was replaced; preserve it')
+                destination.unlink()
+
+
 def stage(output,revision,version):
     source_identity(revision,version)
     output=Path(output).absolute()
@@ -81,15 +156,16 @@ def stage(output,revision,version):
         if not(actual==expected or actual.startswith(expected+' ')):
             raise ValueError('tool release build toolchain differs from its pinned identity')
     with tempfile.TemporaryDirectory(prefix='xssi-release-source-') as temporary:
-        private=Path(temporary);source=private/'source'
+        private=Path(temporary).resolve(strict=True);source=private/'source'
         export_source(revision,source,private/'source.tar')
         graph=sbom.produce_runtime_cargo_bom(source,source/'Cargo.toml','xssi',output,'xssi',
             [(source,revision)],target=TARGET,environment=env)
         env['CARGO_NET_OFFLINE']='true'
-        target=Path(env.get('CARGO_TARGET_DIR',str(private/'target'))).absolute()
+        target=private/'target';target.mkdir(mode=0o700)
         env['CARGO_TARGET_DIR']=str(target)
-        sbom.run(['cargo','build','--frozen','--release','--target',TARGET,'--bin','setup'],source,env,maximum=4*1024*1024,timeout=1800)
-        copy(target/TARGET/'release/setup',output/'libexec/setup',0o755)
+        messages=sbom.run(['cargo','build','--frozen','--release','--target',TARGET,'--bin','setup','--message-format=json-render-diagnostics'],source,env,maximum=8*1024*1024,timeout=1800)
+        package_id=release_sbom.load(source/'xssi-cargo-selection.json')['root']
+        compiler=copy_compiler_artifact(messages,source,target,output/'libexec/setup',version,package_id)
         for name in ('install.sh','maintenance.sh','upgrade.sh'):copy(source/name,output/name,0o755)
         for name in RUNTIME_MODULES:copy(source/'scripts'/name,output/'libexec'/name,0o644)
         copy(source/'Cargo.lock',output/'share/Cargo.lock',0o644)
@@ -108,6 +184,7 @@ def stage(output,revision,version):
         if report!=('setup '+version+'\n').encode():raise ValueError('actual compiled helper reports another release version')
         provenance={'format_version':1,'product':'xssi','version':version,'source_revision':revision,'target':TARGET,
                     'toolchain':{'rust':'1.99.0','node':'26.7.0','cargo_cyclonedx':'0.5.9','cargo_audit':'0.22.2'},
+                    'compiler_artifact':compiler,
                     'helper_sha256':release_sbom.digest(output/'libexec/setup')}
         (output/'share/build-provenance.json').write_text(json.dumps(provenance,sort_keys=True,indent=2)+'\n')
         (output/'share/build-provenance.json').chmod(0o644)

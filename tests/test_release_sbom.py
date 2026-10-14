@@ -168,5 +168,26 @@ class ReleaseInventoryTests(unittest.TestCase):
         self.assertEqual(document,self.generate(output_relative='usr/share/doc/fixture/release-sbom.cdx.json'))
         self.assertFalse(any(item.get('name')=='usr/share/doc/fixture/release-sbom.cdx.json' for item in document['components']))
 
+    def test_fresh_native_graph_temporary_root_resolves_a_platform_alias(self):
+        actual=self.root/'physical-native-graphs';actual.mkdir()
+        alias=self.root/'platform-temp-alias'
+        try:alias.symlink_to(actual,target_is_directory=True)
+        except OSError as error:self.skipTest('platform cannot create the temporary-directory alias: '+str(error))
+        graph=json.loads(self.bom.read_text())
+        self.path.write_text(json.dumps(self.receipt))
+        original=sbom.dependencies
+        observed=[]
+        def read_graphs(paths):
+            observed.extend(paths)
+            return original(paths)
+        from contextlib import nullcontext
+        with patch.object(sbom,'native_graphs',return_value=([graph],[],[])), \
+             patch.object(sbom.tempfile,'TemporaryDirectory',return_value=nullcontext(str(alias))), \
+             patch.object(sbom,'dependencies',side_effect=read_graphs):
+            self.generate()
+        self.assertIn(actual/'0.json',observed)
+        self.assertNotIn(alias/'0.json',observed)
+        with self.assertRaises(ValueError):sbom.load(alias/'0.json')
+
 
 if __name__=='__main__':unittest.main()

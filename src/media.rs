@@ -520,11 +520,115 @@ fn pair(certificate: &str, key: &str, maximum: u64) -> anyhow::Result<()> {
     );
     Ok(())
 }
-fn cases(context: &ContextData, algorithm: &Algorithm) -> anyhow::Result<()> {
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GeneratedPairCase {
+    fixture: String,
+    relationship: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LiteralPairCase {
+    certificate_pem: String,
+    key_pem: String,
+}
+
+fn pem_case(input: &Value, maximum: u64) -> anyhow::Result<bool> {
+    ensure!(maximum <= 64 * 1024, "PEM example bound exceeds limit");
+    if input.get("fixture").is_none() {
+        let literal: LiteralPairCase = serde_json::from_value(input.clone())?;
+        return Ok(pair(&literal.certificate_pem, &literal.key_pem, maximum).is_ok());
+    }
+    let generated: GeneratedPairCase = serde_json::from_value(input.clone())?;
+    ensure!(
+        generated.fixture == "openssl-generated-p256-keypair-v1"
+            && matches!(generated.relationship.as_str(), "matching" | "mismatched"),
+        "unknown generated PEM example"
+    );
+    use std::os::unix::fs::PermissionsExt;
+    let directory = tempfile::Builder::new()
+        .prefix("xssi-generated-pem-case-")
+        .permissions(std::fs::Permissions::from_mode(0o700))
+        .tempdir()?;
+    let generate = |name: &str| -> anyhow::Result<(String, String)> {
+        let certificate = directory.path().join(format!("{name}-certificate.pem"));
+        let private = directory.path().join(format!("{name}-key.pem"));
+        // OpenSSL truncates these exclusive 0600 files, preserving their mode.
+        crate::filesystem::create(&certificate, b"")?;
+        crate::filesystem::create(&private, b"")?;
+        crate::subprocess::bounded(
+            Path::new("/usr/bin/openssl"),
+            &[
+                "req".into(),
+                "-x509".into(),
+                "-newkey".into(),
+                "ec".into(),
+                "-pkeyopt".into(),
+                "ec_paramgen_curve:P-256".into(),
+                "-noenc".into(),
+                "-keyout".into(),
+                private
+                    .to_str()
+                    .context("fixture path must be UTF8")?
+                    .into(),
+                "-out".into(),
+                certificate
+                    .to_str()
+                    .context("fixture path must be UTF8")?
+                    .into(),
+                "-subj".into(),
+                "/CN=xssi-generated-contract-fixture".into(),
+                "-days".into(),
+                "1".into(),
+            ],
+            3,
+            64 * 1024,
+        )?;
+        for path in [&certificate, &private] {
+            let information = std::fs::symlink_metadata(path)?;
+            use std::os::unix::fs::MetadataExt;
+            ensure!(
+                information.is_file()
+                    && information.nlink() == 1
+                    && information.permissions().mode() & 0o7777 == 0o600,
+                "generated PEM example permissions differ"
+            );
+        }
+        Ok((
+            String::from_utf8(crate::contracts::read(&certificate, maximum)?)?,
+            String::from_utf8(crate::contracts::read(&private, maximum)?)?,
+        ))
+    };
+    let (certificate, key) = generate("first")?;
+    let key = if generated.relationship == "mismatched" {
+        generate("second")?.1
+    } else {
+        key
+    };
+    Ok(pair(&certificate, &key, maximum).is_ok())
+}
+
+fn verify_cases(
+    algorithm: &Algorithm,
+    mut valid: impl FnMut(&crate::contracts::AlgorithmCase) -> anyhow::Result<bool>,
+) -> anyhow::Result<()> {
     ensure!(
         !algorithm.cases.is_empty() && algorithm.cases.iter().any(|case| case.valid),
         "companion semantic examples missing"
     );
+    for case in &algorithm.cases {
+        ensure!(
+            valid(case)? == case.valid,
+            "companion semantics disagree with example {}",
+            case.name
+        );
+    }
+    Ok(())
+}
+
+fn cases(context: &ContextData, algorithm: &Algorithm) -> anyhow::Result<()> {
     let p = &algorithm.parameters;
     let keys = |value: &Value, allowed: &[&str]| -> anyhow::Result<()> {
         let values = value
@@ -587,7 +691,7 @@ fn cases(context: &ContextData, algorithm: &Algorithm) -> anyhow::Result<()> {
         "pem-keypair-v1" => keys(p, &["certificate", "key", "maximum_bytes"])?,
         _ => anyhow::bail!("required companion algorithm unknown"),
     }
-    for case in &algorithm.cases {
+    verify_cases(algorithm, |case| {
         let valid = match algorithm.kind.as_str() {
             "media-yaml-v1" => {
                 let input = case
@@ -630,21 +734,13 @@ fn cases(context: &ContextData, algorithm: &Algorithm) -> anyhow::Result<()> {
                 }
             }
             "companion-contract-v1" => contract(&algorithm.parameters, &case.input).is_ok(),
-            "pem-keypair-v1" => pair(
-                text(&case.input, "certificate_pem")?,
-                text(&case.input, "key_pem")?,
-                number(&algorithm.parameters, "maximum_bytes")?,
-            )
-            .is_ok(),
+            "pem-keypair-v1" => {
+                pem_case(&case.input, number(&algorithm.parameters, "maximum_bytes")?)?
+            }
             _ => anyhow::bail!("required companion algorithm unknown"),
         };
-        ensure!(
-            valid == case.valid,
-            "companion semantics disagree with example {}",
-            case.name
-        );
-    }
-    Ok(())
+        Ok(valid)
+    })
 }
 pub fn examples(context: &ContextData, media: &Media) -> anyhow::Result<()> {
     ensure!(
@@ -761,41 +857,41 @@ pub fn check(context: &ContextData, media: &Media) -> anyhow::Result<()> {
 mod tests {
     use super::*;
     #[test]
-    fn ephemeral_matching_certificate_is_checked_using_a_private_directory() {
-        use std::os::unix::fs::PermissionsExt;
-        let directory = tempfile::Builder::new()
-            .prefix("xssi-ephemeral-tls-test-")
-            .permissions(std::fs::Permissions::from_mode(0o700))
-            .tempdir()
-            .unwrap();
-        let certificate_path = directory.path().join("certificate.pem");
-        let key_path = directory.path().join("key.pem");
-        crate::subprocess::bounded(
-            Path::new("/usr/bin/openssl"),
-            &[
-                "req".into(),
-                "-x509".into(),
-                "-newkey".into(),
-                "ec".into(),
-                "-pkeyopt".into(),
-                "ec_paramgen_curve:P-256".into(),
-                "-noenc".into(),
-                "-keyout".into(),
-                key_path.to_str().unwrap().into(),
-                "-out".into(),
-                certificate_path.to_str().unwrap().into(),
-                "-subj".into(),
-                "/CN=xssi-ephemeral-tls-test".into(),
-                "-days".into(),
-                "1".into(),
-            ],
-            5,
-            65536,
-        )
-        .unwrap();
-        let certificate = std::fs::read_to_string(certificate_path).unwrap();
-        let key = std::fs::read_to_string(key_path).unwrap();
-        pair(&certificate, &key, 65536).unwrap();
-        assert!(pair(&certificate, "invalid public fixture", 65536).is_err());
+    fn current_pem_contract_examples_generate_matching_and_distinct_keys() {
+        let mut algorithm: Algorithm = serde_json::from_value(serde_json::json!({
+            "kind":"pem-keypair-v1", "description":"Current ephemeral contract examples",
+            "parameters":{"maximum_bytes":65536}, "cases":[
+                {"name":"current-matching-keypair","valid":true,"input":{"fixture":"openssl-generated-p256-keypair-v1","relationship":"matching"}},
+                {"name":"distinct-private-key","valid":false,"input":{"fixture":"openssl-generated-p256-keypair-v1","relationship":"mismatched"}},
+                {"name":"invalid-certificate","valid":false,"input":{"certificate_pem":"not a PEM certificate","key_pem":"not a PEM private key"}},
+                {"name":"missing-certificate","valid":false,"input":{"certificate_pem":"","key_pem":"not a PEM private key"}},
+                {"name":"missing-key","valid":false,"input":{"certificate_pem":"not a PEM certificate","key_pem":""}}
+            ]
+        })).unwrap();
+        verify_cases(&algorithm, |case| pem_case(&case.input, 65536)).unwrap();
+        algorithm.cases.retain(|case| !case.valid);
+        assert!(verify_cases(&algorithm, |case| pem_case(&case.input, 65536)).is_err());
+    }
+
+    #[test]
+    fn generated_pem_examples_reject_unknown_or_changed_contracts() {
+        for input in [
+            serde_json::json!({"fixture":"unknown","relationship":"matching"}),
+            serde_json::json!({"fixture":"openssl-generated-p256-keypair-v1","relationship":"unknown"}),
+            serde_json::json!({"fixture":"openssl-generated-p256-keypair-v1","relationship":"matching","command":"untrusted"}),
+            serde_json::json!({"fixture":"openssl-generated-p256-keypair-v1"}),
+            serde_json::json!({"certificate_pem":"invalid","key_pem":"invalid","fixture":null}),
+            serde_json::json!({"certificate_pem":"invalid","key_pem":"invalid","extra":true}),
+        ] {
+            assert!(pem_case(&input, 65536).is_err());
+        }
+        assert!(pem_case(&serde_json::json!({"fixture":"openssl-generated-p256-keypair-v1","relationship":"matching"}), 65537).is_err());
+        let algorithm: Algorithm = serde_json::from_value(serde_json::json!({
+            "kind":"pem-keypair-v1", "description":"Incorrect positive example",
+            "parameters":{"maximum_bytes":65536}, "cases":[
+                {"name":"mismatch-is-valid","valid":true,"input":{"fixture":"openssl-generated-p256-keypair-v1","relationship":"mismatched"}}
+            ]
+        })).unwrap();
+        assert!(verify_cases(&algorithm, |case| pem_case(&case.input, 65536)).is_err());
     }
 }

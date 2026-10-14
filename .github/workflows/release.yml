@@ -27,6 +27,16 @@ jobs:
         run: |
           cargo install cargo-cyclonedx --version 0.5.9 --locked
           cargo install cargo-audit --version 0.22.2 --locked
+      - name: Install verified native package test tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm libarchive-tools
+          archive="$RUNNER_TEMP/nfpm-2.47.0.tar.gz"
+          curl --fail --location --retry 3 --proto '=https' --output "$archive" https://github.com/goreleaser/nfpm/releases/download/v2.47.0/nfpm_2.47.0_Linux_x86_64.tar.gz
+          printf '%s  %s\n' 0660ca602b2d2d2ae4781a06c692b3eeb9d437ffea05b831d76e41f4a3188783 "$archive" | sha256sum --check -
+          mkdir -m 0700 "$RUNNER_TEMP/native-package-tools"
+          tar --extract --gzip --file "$archive" --directory "$RUNNER_TEMP/native-package-tools" --no-same-owner nfpm
+          sudo install -m 0755 "$RUNNER_TEMP/native-package-tools/nfpm" /usr/local/bin/nfpm
       - name: Validate this actual source
         run: |
           python3 scripts/verify-foundation.py
@@ -34,7 +44,8 @@ jobs:
           cargo clippy --locked --all-targets -- -D warnings
           cargo test --locked --all-targets --no-run --message-format=json-render-diagnostics > "$RUNNER_TEMP/xssi-test-messages.jsonl"
           python3 scripts/run-root-tests.py "$RUNNER_TEMP/xssi-test-messages.jsonl"
-          sudo -- /usr/bin/env -i PATH=/usr/bin:/bin LANG=C.UTF-8 TMPDIR=/tmp /usr/bin/python3 -m unittest discover -s tests -v
+          python3 -m unittest discover -s tests -p test_compiler_artifact.py -v
+          sudo -- /usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin LANG=C.UTF-8 TMPDIR=/tmp /usr/bin/python3 -m unittest discover -s tests -v
           node scripts/generate-third-party-notices.mjs --self-test
           node --test tests/frontend_build.test.mjs
       - name: Build and verify the complete tool archive

@@ -25,6 +25,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+      - name: Install the exact native MSI inspection tool
+        shell: pwsh
+        run: dotnet tool install --global wix --version 4.0.6
       - name: Test actual Windows process trees and regular-file readers
         shell: pwsh
         run: |
@@ -40,6 +43,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m unittest discover -s tests -p test_native_process.py -v
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m unittest discover -s tests -p test_msi_policy.py -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
   scripts:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -54,11 +59,21 @@ jobs:
         with:
           node-version: 26.7.0
           check-latest: false
+      - name: Install verified native package test tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm libarchive-tools
+          archive="$RUNNER_TEMP/nfpm-2.47.0.tar.gz"
+          curl --fail --location --retry 3 --proto '=https' --output "$archive" https://github.com/goreleaser/nfpm/releases/download/v2.47.0/nfpm_2.47.0_Linux_x86_64.tar.gz
+          printf '%s  %s\n' 0660ca602b2d2d2ae4781a06c692b3eeb9d437ffea05b831d76e41f4a3188783 "$archive" | sha256sum --check -
+          mkdir -m 0700 "$RUNNER_TEMP/native-package-tools"
+          tar --extract --gzip --file "$archive" --directory "$RUNNER_TEMP/native-package-tools" --no-same-owner nfpm
+          sudo install -m 0755 "$RUNNER_TEMP/native-package-tools/nfpm" /usr/local/bin/nfpm
       - name: Validate scripts and SHA256 transactions
         run: |
           python3 -m py_compile scripts/*.py
           bash -n install.sh maintenance.sh upgrade.sh scripts/build-package.sh
-          sudo -- /usr/bin/env -i PATH=/usr/bin:/bin LANG=C.UTF-8 TMPDIR=/tmp /usr/bin/python3 -m unittest discover -s tests -v
+          sudo -- /usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin LANG=C.UTF-8 TMPDIR=/tmp /usr/bin/python3 -m unittest discover -s tests -v
           node scripts/generate-third-party-notices.mjs --self-test
           node --test tests/frontend_build.test.mjs
   dependency-inventory:
@@ -100,3 +115,4 @@ jobs:
           cargo clippy --locked --all-targets -- -D warnings
           cargo test --locked --all-targets --no-run --message-format=json-render-diagnostics > "$RUNNER_TEMP/xssi-test-messages.jsonl"
           python3 scripts/run-root-tests.py "$RUNNER_TEMP/xssi-test-messages.jsonl"
+          python3 -m unittest discover -s tests -p test_compiler_artifact.py -v

@@ -192,9 +192,12 @@ def materialize(stage,artifact,inner_bom,format):
                 actual_identity=run([tool('rpm'),'--query','--package','--queryformat','%{'+field+'}',str(artifact)]).decode().strip()
                 if actual_identity!=value:raise ValueError('native RPM identity differs from its exact payload inventory')
             archive=private/'payload.cpio'
-            # rpm2cpio only emits the existing package payload; bsdtar handles the
-            # mature cpio format and safe pathname policy, not a custom parser.
-            command=[tool('rpm2cpio'),str(artifact)]
+            # libarchive reads the RPM payload directly. rpm2cpio 4.18 compares
+            # copied CPIO bytes against LONGARCHIVESIZE, while the pinned nFPM
+            # writer records the sum of file sizes there; it exits 1 after a
+            # complete valid payload. Re-encode with the mature archive tool so
+            # no failed exit is accepted and the decompressed stream stays bound.
+            command=[tool('bsdtar'),'-cf','-','--format=newc','@'+str(artifact)]
             environment={key:value for key,value in os.environ.items() if not any(part in key.upper() for part in ('TOKEN','SECRET','SIGNING','PASSWORD','PRIVATE_KEY'))}
             bounded_dependency_file(command,Path.cwd(),environment,archive,
                                     maximum=2*1024*1024*1024,timeout=600)

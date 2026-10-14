@@ -159,7 +159,7 @@ class NativePackageTests(unittest.TestCase):
         with self.assertRaises(ValueError):release_sbom.finalize(self.stage,[],outer,'fixture','1.0.0','1'*40,
             'x86_64-unknown-linux-gnu',native_packages=[path])
 
-    @unittest.skipUnless(all(shutil.which(name) for name in ('nfpm','rpm','rpm2cpio','bsdtar')),
+    @unittest.skipUnless(all(shutil.which(name) for name in ('nfpm','rpm','bsdtar')),
                          'actual RPM payload/header inspection requires its mature tools')
     def test_actual_rpm_script_bodies_and_interpreter_are_verified_without_fake_modes(self):
         shutil.rmtree(self.payload/'DEBIAN')
@@ -182,11 +182,33 @@ class NativePackageTests(unittest.TestCase):
         self.assertTrue(all(item['mode'] is None for item in data['embedded_files']))
         self.assertEqual({item['path']:item['sha256'] for item in data['embedded_files']},
             {'installer-scripts/'+name+'.sh':release_sbom.digest(scripts/(name+'.sh')) for name in ('postinstall','preremove','postremove')})
+        # The actual nFPM header counts file contents, excluding CPIO framing.
+        # Verify the mature direct-RPM path even for the mismatched header that
+        # makes rpm2cpio 4.18 return a silent failure after copying its payload.
+        declared=int(native_package.run([native_package.tool('rpm'),'--query','--package',
+            '--queryformat','%{LONGARCHIVESIZE}',str(artifact)]))
+        normalized=native_package.run([native_package.tool('bsdtar'),'-cf','-',
+            '--format=newc','@'+str(artifact)])
+        self.assertGreater(len(normalized),declared)
+        limited=self.stage/'limited-nfpm.rpm';shutil.copyfile(artifact,limited)
+        stream=native_package.bounded_dependency_file
+        def bounded_stream(command,cwd,environment,destination,**options):
+            return stream(command,cwd,environment,destination,maximum=32,timeout=30)
+        with patch.object(native_package,'bounded_dependency_file',side_effect=bounded_stream),self.assertRaisesRegex(ValueError,'exceeds its bound'):
+            native_package.materialize(self.stage,limited,self.stage/'share/inner.cdx.json','rpm')
+        self.assertFalse((self.stage/'share'/(limited.name+'.native-receipt.json')).exists())
         outer=self.root/'outer-bindings.json';outer.write_text(json.dumps({'format_version':1,'runtime_roots':[],'components':[]}))
         release_sbom.finalize(self.stage,[],outer,'fixture','1.0.0','1'*40,'x86_64-unknown-linux-gnu',native_packages=[path])
         ordinary=data['installed_files'][0];ordinary['mode']=None;path.write_text(json.dumps(data))
         with self.assertRaises(ValueError):release_sbom.finalize(self.stage,[],outer,'fixture','1.0.0','1'*40,
             'x86_64-unknown-linux-gnu',native_packages=[path])
+        (self.payload/'usr/bin/client').write_bytes(b'changed actual RPM executable')
+        changed=self.stage/'changed-nfpm.rpm'
+        subprocess.run([shutil.which('nfpm'),'package','--config',str(configuration),'--packager','rpm','--target',str(changed)],
+            check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=30)
+        with self.assertRaisesRegex(ValueError,'payload differs'):
+            native_package.materialize(self.stage,changed,self.stage/'share/inner.cdx.json','rpm')
+        self.assertFalse((self.stage/'share'/(changed.name+'.native-receipt.json')).exists())
 
 
 if __name__=='__main__':unittest.main()

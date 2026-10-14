@@ -503,9 +503,10 @@ def finalize(stage, dependency_boms, receipt, product, version, revision, target
     native_boms,native_bindings,native_evidence=native_graphs(stage,native_packages,inventory,product,version,revision,target)
     # Temporary normalized graphs never become extra shipped payload files.
     with tempfile.TemporaryDirectory(prefix='xssi-native-runtime-') as temporary:
+        private_root=Path(temporary).resolve(strict=True)
         graph_paths=[]
         for index,bom in enumerate(native_boms):
-            path=Path(temporary)/f'{index}.json';path.write_text(json.dumps(bom));graph_paths.append(path)
+            path=private_root/f'{index}.json';path.write_text(json.dumps(bom),encoding='utf-8');graph_paths.append(path)
         components, edges, roots = dependencies([*dependency_boms,*graph_paths])
     covered = set()
     bindings = set()

@@ -1,10 +1,14 @@
 import copy
+import json
+import os
+import shutil
 from pathlib import Path
 import sys
 import tempfile
 import unittest
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 import msi_policy
+from sbom import run
 
 # A standalone source fixture exercises effects without relying on sibling
 # product repositories or pretending that a compiled MSI ran on this host.
@@ -36,6 +40,49 @@ AUTHORING='''<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
 
 
 class MsiPolicyTests(unittest.TestCase):
+    @unittest.skipUnless(os.name=='nt','actual WiX and Windows Installer COM database')
+    def test_actual_wix_msi_tables_preserve_rows_and_reject_unreviewed_actions(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary).resolve(strict=True)
+            executable=root/'fixture.exe';shutil.copyfile(sys.executable,executable)
+            wix=shutil.which('wix')
+            self.assertIsNotNone(wix,'Windows producer gate requires exact WiX 4.0.6')
+            environment=dict(os.environ)
+            version=run([wix,'--version'],root,environment,maximum=8192,timeout=30).decode().strip()
+            self.assertTrue(version=='4.0.6' or version.startswith('4.0.6+'),version)
+            for extension in ('WixToolset.UI.wixext','WixToolset.Util.wixext'):
+                run([wix,'extension','add','-g',extension+'/4.0.6'],root,environment,maximum=1024*1024,timeout=120)
+            source=root/'fixture.wxs';source.write_text(AUTHORING,encoding='utf-8')
+            policy=msi_policy.create(source,root/'stage','1.0.0','a'*40)
+            for altered in (False,True):
+                if altered:
+                    source.write_text(AUTHORING.replace('</Package>',
+                        '<CustomAction Id="Unreviewed" FileRef="ClientExe" ExeCommand="unreviewed native effect" Execute="deferred" Impersonate="no" Return="check" /></Package>'),encoding='utf-8')
+                artifact=root/('altered.msi' if altered else 'actual.msi')
+                run([wix,'build','-arch','x64','-ext','WixToolset.UI.wixext','-ext','WixToolset.Util.wixext',
+                     '-d','ProductVersion=1.0.0','-d','ClientExe='+str(executable),
+                     '-o',str(artifact),str(source)],root,environment,maximum=1024*1024,timeout=120)
+                output=root/('altered.json' if altered else 'actual.json')
+                run(['powershell.exe','-NoProfile','-NonInteractive','-File',
+                     str(Path(msi_policy.__file__).with_name('msi_tables.ps1')),
+                     '-Artifact',str(artifact),'-Output',str(output)],root,environment,maximum=8192,timeout=30)
+                actual=json.loads(output.read_text(encoding='utf-8'))
+                self.assertTrue({'Property','Component','Directory','Registry','InstallExecuteSequence','ServiceInstall'}<=set(actual['table_names']))
+                self.assertTrue(all(isinstance(value,str) for value in actual['table_names']))
+                self.assertTrue(all(isinstance(row,list) and len(row)==2 for row in actual['properties']))
+                self.assertTrue(['ProductName','fixture'] in actual['properties'])
+                self.assertEqual(len(actual['services']),1)
+                self.assertEqual(len(actual['services'][0]),13)
+                self.assertEqual(actual['services'][0][9],'')
+                self.assertEqual(len(actual['registry']),2)
+                self.assertTrue(all(isinstance(row,list) and len(row)==6 for row in actual['registry']))
+                self.assertEqual(actual['remove_files'],[])
+                self.assertEqual((actual['template'],actual['installer_version']),('x64;1033',500))
+                if altered:
+                    self.assertTrue(any(row[0]=='Unreviewed' for row in actual['actions']))
+                    with self.assertRaises(ValueError):self.check(policy,actual)
+                else:self.check(policy,actual)
+
     def fixture(self,authoring=AUTHORING):
         temporary=tempfile.TemporaryDirectory();self.addCleanup(temporary.cleanup)
         folder=Path(temporary.name);source=folder/'fixture.wxs';source.write_text(authoring)
