@@ -54,7 +54,9 @@ def _download(url, environment):
     # The shared runner bounds wall time, output and the entire process tree.
     # urllib's socket timeout alone cannot bound a peer trickling bytes forever.
     from sbom import run
-    return run([sys.executable, str(Path(__file__).resolve()), '--download', url],
+    # A fresh interpreter does not inherit the parent's dont_write_bytecode.
+    # Its imports must not create ignored caches in the immutable tool source.
+    return run([sys.executable, '-B', str(Path(__file__).resolve()), '--download', url],
                ROOT, environment, maximum=MAX_LICENSE, timeout=90)
 
 

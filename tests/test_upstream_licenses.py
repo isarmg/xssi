@@ -1,6 +1,10 @@
 import hashlib
+import importlib.util
 import json
+import os
 from pathlib import Path
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -11,6 +15,31 @@ import upstream_licenses as upstream
 
 
 class UpstreamLicenses(unittest.TestCase):
+    @unittest.skipIf(os.name=='nt','the formal helper source digest uses Linux file authority')
+    def test_real_downloader_child_preserves_the_strict_immutable_source_digest(self):
+        with tempfile.TemporaryDirectory(prefix='xssi-source-child-') as temporary:
+            root=Path(temporary).resolve(strict=True)
+            scripts=root/'scripts'
+            shutil.copytree(Path(upstream.__file__).parent,scripts,ignore=shutil.ignore_patterns('__pycache__'))
+            spec=importlib.util.spec_from_file_location('isolated_upstream_downloader',scripts/'upstream_licenses.py')
+            module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+            helper_spec=importlib.util.spec_from_file_location('isolated_source_guard',scripts/'build-helper.py')
+            helper=importlib.util.module_from_spec(helper_spec);helper_spec.loader.exec_module(helper)
+            before=helper.source_digest(root)
+            environment=os.environ.copy()
+            environment.pop('PYTHONDONTWRITEBYTECODE',None)
+            environment.pop('PYTHONPYCACHEPREFIX',None)
+            # Real production subprocess and imports, rejected by the public
+            # HTTPS policy before networking; never a fake downloader process.
+            with self.assertRaises(subprocess.CalledProcessError) as failure:
+                module._download('https://unreviewed.example.invalid/LICENSE',environment)
+            self.assertEqual(failure.exception.returncode,1)
+            self.assertEqual(helper.source_digest(root),before)
+            self.assertFalse(list(root.rglob('__pycache__')))
+            changed=scripts/'upstream_licenses.py'
+            changed.write_bytes(changed.read_bytes()+b'\n# changed immutable source fixture\n')
+            self.assertNotEqual(helper.source_digest(root),before)
+
     def fixture(self, root):
         root = Path(root).resolve(strict=True)
         directory = root / 'xssi-vendor' / 'fixture-1.0.0'
