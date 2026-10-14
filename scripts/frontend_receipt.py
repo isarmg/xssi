@@ -149,6 +149,8 @@ class Packages:
         original=json.loads(files['package.json'],object_pairs_hook=unique_fields)
         if original['name']!=package['name'] or original['version']!=package['version']:
             raise ValueError('actual npm distribution identity differs from the rendered package')
+        if original.get('license')!=package.get('license'):
+            raise ValueError('rendered npm license metadata differs from its original distribution')
         result={'package':package,'files':files,'source':{'url':lock['resolved'],'sha256':hashlib.sha256(archive).hexdigest()}}
         self.loaded[path]=result;return result
 
@@ -164,12 +166,14 @@ class Packages:
 
 def original_notices(package,stage,name):
     license_=package['package'].get('license')
-    if license_ not in ('MIT','Apache-2.0','BSD-2-Clause','BSD-3-Clause','ISC'):
-        raise ValueError('rendered npm package requires an explicitly reviewed upstream license')
+    # Preserve the reviewed upstream dual-license declaration and both original
+    # license documents rather than relabeling either document as one branch.
+    if license_ not in ('MIT','Apache-2.0','BSD-2-Clause','BSD-3-Clause','ISC','(MPL-2.0 OR Apache-2.0)'):
+        raise ValueError('rendered npm package '+package['package']['name']+' requires an explicitly reviewed upstream license')
     notices={path:content for path,content in package['files'].items()
-        if '/' not in path and re.fullmatch(r'(LICENSE|LICENCE|COPYING|NOTICE|THIRD-PARTY-LICENSE)(\..*)?',path,re.I)}
+        if '/' not in path and re.fullmatch(r'(LICENSE|LICENCE|COPYING|NOTICE|THIRD-PARTY-LICENSE)([._-].*)?',path,re.I)}
     if not any(re.match(r'LICENSE|LICENCE|COPYING',path,re.I) for path in notices):
-        raise ValueError('rendered npm package has no original upstream license text')
+        raise ValueError('rendered npm package '+package['package']['name']+' has no original upstream license text')
     result=[]
     for path,content in sorted(notices.items()):
         if not content.strip():raise ValueError('upstream runtime notice is empty')

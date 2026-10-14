@@ -89,9 +89,9 @@ class FrontendReceiptTests(unittest.TestCase):
         self.compiled = {'format': 'web-assets-v1', 'files': copy.deepcopy(self.receipt['outputs'])}
         self.metadata = self.root / 'frontend.json'
 
-    def add_package(self, path, name, version, files):
-        package = {'name': name, 'version': version, 'license': 'MIT'}
-        contents = {'package.json': json.dumps(package).encode(), 'LICENSE': b'Actual upstream fixture MIT license and copyright.\n', **files}
+    def add_package(self, path, name, version, files, license_id='MIT', license_filename='LICENSE'):
+        package = {'name': name, 'version': version, 'license': license_id}
+        contents = {'package.json': json.dumps(package).encode(), license_filename: b'Actual upstream fixture MIT license and copyright.\n', **files}
         archive = tarball(contents)
         url = 'https://registry.example.invalid/' + name.replace('/', '-') + '-' + version + '.tgz'
         self.remote[url] = archive
@@ -131,6 +131,57 @@ class FrontendReceiptTests(unittest.TestCase):
     def test_missing_entire_rendered_module_graph_is_rejected(self):
         self.receipt['modules'] = []
         with self.assertRaises(ValueError):
+            self.generate()
+
+    def test_reviewed_dual_license_keeps_declaration_and_original_documents(self):
+        text = b'Actual upstream fixture Apache-2.0 license and copyright.\n'
+        alternative = b'Actual upstream fixture MPL-2.0 alternative license.\n'
+        self.add_package('node_modules/runtime-lib', 'runtime-lib', '1.2.3',
+                         {'index.js': self.runtime_code, 'LICENSE': text, 'LICENSE-MPL': alternative},
+                         license_id='(MPL-2.0 OR Apache-2.0)')
+        runtime = next(item for item in self.generate() if item['name'] == 'runtime-lib')
+        self.assertTrue(all(item['name'] == '(MPL-2.0 OR Apache-2.0)' for item in runtime['licenses']))
+        self.assertEqual(runtime['licenses'][0]['sha256'], digest(text))
+        self.assertEqual((self.stage / runtime['licenses'][0]['path']).read_bytes(), text)
+        self.assertEqual((self.stage / runtime['licenses'][1]['path']).read_bytes(), alternative)
+
+    def test_unreviewed_license_expressions_do_not_gain_an_implicit_choice(self):
+        for license_id in ('MPL-2.0', '(MPL-2.0 AND Apache-2.0)',
+                           '(Unreviewed OR Apache-2.0)', '', None):
+            with self.subTest(license_id=license_id):
+                self.add_package('node_modules/runtime-lib', 'runtime-lib', '1.2.3',
+                                 {'index.js': self.runtime_code}, license_id=license_id)
+                with self.assertRaisesRegex(ValueError, 'runtime-lib requires an explicitly reviewed'):
+                    self.generate()
+
+    def test_dual_license_still_requires_original_nonempty_text(self):
+        self.add_package('node_modules/runtime-lib', 'runtime-lib', '1.2.3',
+                         {'index.js': self.runtime_code, 'LICENSE': b''},
+                         license_id='(MPL-2.0 OR Apache-2.0)')
+        with self.assertRaisesRegex(ValueError, 'upstream runtime notice is empty'):
+            self.generate()
+
+    def test_local_license_metadata_cannot_replace_original_upstream_terms(self):
+        path = self.web / 'node_modules/runtime-lib/package.json'
+        package = json.loads(path.read_text())
+        package['license'] = '(MPL-2.0 OR Apache-2.0)'
+        path.write_text(json.dumps(package))
+        with self.assertRaisesRegex(ValueError, 'license metadata differs from its original distribution'):
+            self.generate()
+
+    def test_original_root_license_suffixes_are_preserved(self):
+        for filename in ('LICENSE-MIT.txt', 'LICENSE_MIT', 'COPYING.md'):
+            with self.subTest(filename=filename):
+                self.add_package('node_modules/runtime-lib', 'runtime-lib', '1.2.3',
+                                 {'index.js': self.runtime_code}, license_filename=filename)
+                runtime = next(item for item in self.generate() if item['name'] == 'runtime-lib')
+                self.assertEqual([item['path'] for item in runtime['licenses']],
+                                 ['share/licenses/frontend/runtime-lib/' + filename])
+
+    def test_arbitrary_filename_does_not_replace_an_original_license(self):
+        self.add_package('node_modules/runtime-lib', 'runtime-lib', '1.2.3',
+                         {'index.js': self.runtime_code}, license_filename='NOTLICENSE.txt')
+        with self.assertRaisesRegex(ValueError, 'runtime-lib has no original upstream license text'):
             self.generate()
 
     def test_partial_output_inventory_cannot_hide_compiled_javascript(self):
