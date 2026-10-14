@@ -1,0 +1,77 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+permissions: {}
+jobs:
+  build:
+    if: github.repository == 'isarmg/xssi' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install exact Rust toolchain
+        run: rustup toolchain install 1.99.0 --profile minimal --component rustfmt,clippy
+      - name: Install exact Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 26.7.0
+          check-latest: false
+      - name: Install locked inventory tools
+        run: |
+          cargo install cargo-cyclonedx --version 0.5.9 --locked
+          cargo install cargo-audit --version 0.22.2 --locked
+      - name: Validate this actual source
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo test --locked --all-targets --no-run --message-format=json-render-diagnostics > "$RUNNER_TEMP/xssi-test-messages.jsonl"
+          python3 scripts/run-root-tests.py "$RUNNER_TEMP/xssi-test-messages.jsonl"
+          sudo -- /usr/bin/env -i PATH=/usr/bin:/bin LANG=C.UTF-8 TMPDIR=/tmp /usr/bin/python3 -m unittest discover -s tests -v
+          node scripts/generate-third-party-notices.mjs --self-test
+          node --test tests/frontend_build.test.mjs
+      - name: Build and verify the complete tool archive
+        run: |
+          revision="$(git rev-parse HEAD)"
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -m 0755 "$RUNNER_TEMP/xssi-assets"
+          python3 scripts/stage-release.py --output "$RUNNER_TEMP/xssi-package" --source-revision "$revision" --version "$version"
+          python3 scripts/finalize-release.py --stage "$RUNNER_TEMP/xssi-package" --output "$RUNNER_TEMP/xssi-assets" --source-revision "$revision" --version "$version"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: xssi-release
+          path: ${{ runner.temp }}/xssi-assets/*
+          if-no-files-found: error
+          retention-days: 7
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: xssi-release
+          path: release-assets
+      - name: Publish immutable verified assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo 'An existing release is immutable; choose another source version.' >&2
+            exit 1
+          fi
+          cd release-assets
+          sha256sum --check xssi-*-linux-x86_64.tar.gz.sha256
+          version="${GITHUB_REF_NAME#v}"
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --title "$GITHUB_REF_NAME" --notes-file "$GITHUB_WORKSPACE/docs/releases/$version.md" ./*

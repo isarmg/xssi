@@ -1,0 +1,30 @@
+[Unit]
+Description=@PRODUCT@ server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=isarmg-@PRODUCT@
+Group=isarmg-@PRODUCT@
+Environment=TZ=UTC
+ExecStart="@ROOT@/@SERVER@" --root "@ROOT@"
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+TimeoutStopSec=120s
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

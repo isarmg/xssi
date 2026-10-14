@@ -1,0 +1,26 @@
+[Unit]
+Description=@PRODUCT@ media writer
+After=network-online.target
+Wants=network-online.target
+PartOf=@PRODUCT@.service
+
+[Service]
+Type=simple
+User=isarmg-@PRODUCT@
+Group=isarmg-@PRODUCT@
+Environment=TZ=UTC
+EnvironmentFile="@ROOT@/config/mediamtx.env"
+ExecStart="@ROOT@/bin/mediamtx" "@ROOT@/config/mediamtx.yml"
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateDevices=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+TimeoutStopSec=120s
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

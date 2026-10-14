@@ -1,0 +1,1090 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version",
+    "identity",
+    "schema_identity",
+    "authority_sources",
+    "config",
+    "credentials",
+    "databases",
+    "secrets",
+    "resources",
+    "writers",
+    "media"
+  ],
+  "properties": {
+    "contract_version": {
+      "const": 1
+    },
+    "identity": {
+      "$ref": "#/$defs/identity"
+    },
+    "schema_identity": {
+      "$ref": "#/$defs/schema_identity"
+    },
+    "authority_sources": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path",
+          "sha256",
+          "generator"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 65536
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "generator": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 65536
+          }
+        }
+      }
+    },
+    "config": {
+      "$ref": "#/$defs/config"
+    },
+    "credentials": {
+      "$ref": "#/$defs/credentials"
+    },
+    "databases": {
+      "type": "array",
+      "maxItems": 16,
+      "items": {
+        "$ref": "#/$defs/database"
+      }
+    },
+    "secrets": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {
+        "$ref": "#/$defs/secret"
+      }
+    },
+    "resources": {
+      "$ref": "#/$defs/resources"
+    },
+    "writers": {
+      "type": "array",
+      "maxItems": 16,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "role",
+          "service",
+          "configuration_paths"
+        ],
+        "properties": {
+          "role": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 65536
+          },
+          "service": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 65536
+          },
+          "configuration_paths": {
+            "type": "array",
+            "maxItems": 32,
+            "items": {
+              "$ref": "#/$defs/path"
+            }
+          }
+        }
+      }
+    },
+    "media": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/media"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:xssi:install-contract:1",
+  "description": "Generated current installation contract; every asset is bound to signed PackageManifest files. Unknown algorithms/rules reject related operations; no historical migrations.",
+  "$defs": {
+    "path": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "base",
+        "value",
+        "fallback",
+        "suffix",
+        "encoding"
+      ],
+      "properties": {
+        "base": {
+          "enum": [
+            "root",
+            "config"
+          ]
+        },
+        "value": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536
+        },
+        "fallback": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/path"
+            }
+          ]
+        },
+        "suffix": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "encoding": {
+          "enum": [
+            "path",
+            "sqlite-url",
+            "sibling-lock",
+            "sqlite-sibling-lock"
+          ]
+        }
+      }
+    },
+    "statement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sql",
+        "parameters",
+        "expected_changes"
+      ],
+      "properties": {
+        "sql": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536
+        },
+        "parameters": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/parameter"
+          }
+        },
+        "expected_changes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        }
+      }
+    },
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "sql",
+        "expect",
+        "parameters"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536
+        },
+        "sql": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536
+        },
+        "expect": {
+          "enum": [
+            "no-rows",
+            "one-row",
+            "true",
+            "integrity-ok"
+          ]
+        },
+        "parameters": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/parameter"
+          }
+        }
+      }
+    },
+    "rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "fields",
+        "arguments"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "integer-range",
+            "integer-order",
+            "socket-address",
+            "distinct-sockets",
+            "path",
+            "root-state-paths",
+            "external-web-override",
+            "enum",
+            "url",
+            "string-bytes",
+            "string-trim-no-control",
+            "object-value-string-bytes",
+            "complete-string-set",
+            "path-relation",
+            "integer-sum-order",
+            "path-equals",
+            "token-template"
+          ]
+        },
+        "fields": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 65536
+          }
+        },
+        "arguments": {
+          "type": "object"
+        }
+      }
+    },
+    "algorithm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "description",
+        "parameters",
+        "cases"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536
+        },
+        "parameters": {
+          "type": "object"
+        },
+        "cases": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "input",
+              "valid"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 65536
+              },
+              "input": {},
+              "valid": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      }
+    },
+    "asset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "product",
+        "version",
+        "source_revision",
+        "target",
+        "state_contract_sha256"
+      ],
+      "properties": {
+        "product": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+        },
+        "source_revision": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "target": {
+          "const": "x86_64-unknown-linux-gnu"
+        },
+        "state_contract_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "schema_identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "application",
+        "application_version",
+        "schema_revision",
+        "schema_sha256"
+      ],
+      "properties": {
+        "application": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536
+        },
+        "application_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536
+        },
+        "schema_revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "schema_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "credentials": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "policy_revision",
+        "username",
+        "password",
+        "argon2",
+        "administrator_query",
+        "session_query",
+        "administrator_id_format",
+        "cases",
+        "identifier_max_bytes",
+        "identifier_random_bytes",
+        "session_digest_bytes",
+        "maximum_session_rows"
+      ],
+      "properties": {
+        "policy_revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "username": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "normalization",
+            "minimum_bytes",
+            "maximum_bytes",
+            "pattern",
+            "reject_ascii_control"
+          ],
+          "properties": {
+            "normalization": {
+              "enum": [
+                "ascii-trim-lowercase"
+              ]
+            },
+            "minimum_bytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 4096
+            },
+            "maximum_bytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 4096
+            },
+            "pattern": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 65536
+            },
+            "reject_ascii_control": {
+              "const": true
+            }
+          }
+        },
+        "password": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "minimum_bytes",
+            "maximum_bytes",
+            "reject_ascii_control"
+          ],
+          "properties": {
+            "minimum_bytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 4096
+            },
+            "maximum_bytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 4096
+            },
+            "reject_ascii_control": {
+              "const": true
+            }
+          }
+        },
+        "argon2": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "algorithm",
+            "version",
+            "memory_kib",
+            "iterations",
+            "parallelism",
+            "output_bytes",
+            "salt_bytes"
+          ],
+          "properties": {
+            "algorithm": {
+              "const": "argon2id"
+            },
+            "version": {
+              "const": 19
+            },
+            "memory_kib": {
+              "type": "integer",
+              "minimum": 8,
+              "maximum": 1048576
+            },
+            "iterations": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 32
+            },
+            "parallelism": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 16
+            },
+            "output_bytes": {
+              "type": "integer",
+              "minimum": 16,
+              "maximum": 64
+            },
+            "salt_bytes": {
+              "type": "integer",
+              "minimum": 8,
+              "maximum": 64
+            }
+          }
+        },
+        "administrator_query": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536
+        },
+        "session_query": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536
+        },
+        "administrator_id_format": {
+          "const": "base64url-no-pad"
+        },
+        "cases": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "username",
+              "password",
+              "normalized_username",
+              "valid"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 65536
+              },
+              "username": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 65536
+              },
+              "password": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 65536
+              },
+              "normalized_username": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "maxLength": 65536
+              },
+              "valid": {
+                "type": "boolean"
+              }
+            }
+          }
+        },
+        "identifier_max_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4096
+        },
+        "identifier_random_bytes": {
+          "type": "integer",
+          "minimum": 16,
+          "maximum": 128
+        },
+        "session_digest_bytes": {
+          "type": "integer",
+          "minimum": 16,
+          "maximum": 64
+        },
+        "maximum_session_rows": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2000000
+        }
+      }
+    },
+    "database": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "path",
+        "ddl",
+        "schema_identity",
+        "fingerprint_algorithm",
+        "initialize",
+        "reset_administrator",
+        "checks",
+        "validation",
+        "schema_stamp"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536
+        },
+        "path": {
+          "$ref": "#/$defs/path"
+        },
+        "ddl": {
+          "$ref": "#/$defs/asset"
+        },
+        "schema_identity": {
+          "$ref": "#/$defs/schema_identity"
+        },
+        "fingerprint_algorithm": {
+          "const": "sqlite-schema-v1"
+        },
+        "initialize": {
+          "type": "array",
+          "maxItems": 256,
+          "items": {
+            "$ref": "#/$defs/statement"
+          }
+        },
+        "reset_administrator": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/statement"
+          }
+        },
+        "checks": {
+          "type": "array",
+          "maxItems": 256,
+          "items": {
+            "$ref": "#/$defs/check"
+          }
+        },
+        "validation": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "$ref": "#/$defs/algorithm"
+          }
+        },
+        "schema_stamp": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/schema_identity"
+            }
+          ]
+        }
+      }
+    },
+    "secret": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "path",
+        "format",
+        "fields",
+        "constants",
+        "validation",
+        "cases"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536
+        },
+        "path": {
+          "$ref": "#/$defs/path"
+        },
+        "format": {
+          "enum": [
+            "json",
+            "raw"
+          ]
+        },
+        "fields": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "bytes",
+              "encoding"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 65536
+              },
+              "bytes": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1024
+              },
+              "encoding": {
+                "enum": [
+                  "base64url-no-pad",
+                  "base64",
+                  "hex",
+                  "raw",
+                  "byte-array"
+                ]
+              }
+            }
+          }
+        },
+        "constants": {
+          "type": "object"
+        },
+        "validation": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "$ref": "#/$defs/algorithm"
+          }
+        },
+        "cases": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "input",
+              "valid"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 65536
+              },
+              "input": {},
+              "valid": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      }
+    },
+    "config": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "defaults",
+        "data_dir",
+        "bind_pointer",
+        "rules",
+        "cases"
+      ],
+      "properties": {
+        "schema": {
+          "type": "object"
+        },
+        "defaults": {
+          "type": "object"
+        },
+        "data_dir": {
+          "$ref": "#/$defs/path"
+        },
+        "bind_pointer": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536
+        },
+        "rules": {
+          "type": "array",
+          "maxItems": 256,
+          "items": {
+            "$ref": "#/$defs/rule"
+          }
+        },
+        "cases": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "value",
+              "valid"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 65536
+              },
+              "value": {
+                "type": "object"
+              },
+              "valid": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      }
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state_paths",
+        "writable_paths",
+        "readonly_paths",
+        "shared_paths",
+        "config_write_paths",
+        "private_directories",
+        "business_paths",
+        "runtime_locks",
+        "business_directories"
+      ],
+      "properties": {
+        "state_paths": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/path"
+          }
+        },
+        "writable_paths": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/path"
+          }
+        },
+        "readonly_paths": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/path"
+          }
+        },
+        "shared_paths": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/path"
+          }
+        },
+        "config_write_paths": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/path"
+          }
+        },
+        "private_directories": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/path"
+          }
+        },
+        "business_paths": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/path"
+          }
+        },
+        "runtime_locks": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "path",
+              "kind"
+            ],
+            "properties": {
+              "path": {
+                "$ref": "#/$defs/path"
+              },
+              "kind": {
+                "enum": [
+                  "file",
+                  "directory"
+                ]
+              }
+            }
+          }
+        },
+        "business_directories": {
+          "type": "array",
+          "maxItems": 256,
+          "items": {
+            "$ref": "#/$defs/path"
+          }
+        }
+      }
+    },
+    "media": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "configuration_path",
+        "template",
+        "substitutions",
+        "binary",
+        "contract",
+        "validation"
+      ],
+      "properties": {
+        "configuration_path": {
+          "$ref": "#/$defs/path"
+        },
+        "template": {
+          "$ref": "#/$defs/asset"
+        },
+        "substitutions": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "source",
+              "encoding"
+            ],
+            "properties": {
+              "source": {
+                "$ref": "#/$defs/media_source"
+              },
+              "encoding": {
+                "enum": [
+                  "plain",
+                  "json-string"
+                ]
+              }
+            }
+          }
+        },
+        "binary": {
+          "$ref": "#/$defs/asset"
+        },
+        "contract": {
+          "$ref": "#/$defs/asset"
+        },
+        "validation": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "$ref": "#/$defs/algorithm"
+          }
+        }
+      }
+    },
+    "parameter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "value",
+        "type"
+      ],
+      "properties": {
+        "source": {
+          "enum": [
+            "literal",
+            "username",
+            "password_hash",
+            "administrator_id",
+            "now_micros",
+            "schema.application",
+            "schema.application_version",
+            "schema.schema_revision",
+            "schema.schema_sha256",
+            "secret",
+            "event_id",
+            "resource_device_be",
+            "resource_inode_be",
+            "resource_path",
+            "root",
+            "data_dir",
+            "metadata_policy_revision",
+            "username_sha256",
+            "uuid-v4"
+          ]
+        },
+        "value": {
+          "type": [
+            "string",
+            "integer",
+            "boolean",
+            "null"
+          ]
+        },
+        "type": {
+          "enum": [
+            "text",
+            "integer",
+            "boolean",
+            "null",
+            "blob"
+          ]
+        }
+      }
+    },
+    "media_source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "value",
+        "prefix",
+        "suffix"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "config",
+            "resource",
+            "root",
+            "literal",
+            "secret",
+            "url-host"
+          ]
+        },
+        "value": {
+          "type": "string",
+          "maxLength": 65536
+        },
+        "prefix": {
+          "type": "string",
+          "maxLength": 65536
+        },
+        "suffix": {
+          "type": "string",
+          "maxLength": 65536
+        }
+      }
+    }
+  }
+}

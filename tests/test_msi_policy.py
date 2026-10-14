@@ -1,0 +1,135 @@
+import copy
+from pathlib import Path
+import sys
+import tempfile
+import unittest
+sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
+import msi_policy
+
+# A standalone source fixture exercises effects without relying on sibling
+# product repositories or pretending that a compiled MSI ran on this host.
+AUTHORING='''<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+ xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui"
+ xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+ <Package Name="fixture" Manufacturer="sarmg" UpgradeCode="01234567-0123-0123-0123-012345678901"
+ Version="$(var.ProductVersion)" Scope="perMachine" InstallerVersion="500">
+  <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
+  <StandardDirectory Id="ProgramFiles64Folder"><Directory Id="INSTALLFOLDER" Name="Fixture">
+   <Component Id="ServiceComponent" Guid="01234567-0123-0123-0123-012345678901" Bitness="always64">
+    <File Id="ClientExe" Name="fixture.exe" Source="$(var.ClientExe)" KeyPath="yes" />
+    <Environment Id="MachinePath" Name="PATH" Value="[INSTALLFOLDER]" Action="set" Part="last" Permanent="no" System="yes" />
+    <RegistryValue Root="HKLM" Key="Software\\sarmg\\fixture" Name="InstallLocation" Type="string" Value="[INSTALLFOLDER]" />
+    <RegistryValue Root="HKLM" Key="Software\\sarmg\\fixture" Name="Enabled" Type="integer" Value="1" />
+    <ServiceInstall Id="SvcInstall" Name="FixtureSvc" DisplayName="Fixture" Description="Fixture service description"
+     Type="ownProcess" Start="demand" ErrorControl="normal" Account="NT AUTHORITY\\LocalService"
+     Arguments="--windows-service --config &quot;[CommonAppDataFolder]Fixture&quot;">
+     <util:ServiceConfig FirstFailureActionType="restart" SecondFailureActionType="restart" ThirdFailureActionType="restart"
+      ResetPeriodInDays="1" RestartServiceDelayInSeconds="60" />
+    </ServiceInstall>
+    <ServiceControl Id="SvcControl" Name="FixtureSvc" Stop="both" Remove="uninstall" Wait="yes" />
+   </Component>
+  </Directory></StandardDirectory>
+  <CustomAction Id="PrepareSetup" FileRef="ClientExe" ExeCommand="installer prepare-setup" Execute="commit" Impersonate="no" Return="check" />
+  <InstallExecuteSequence><Custom Action="PrepareSetup" After="InstallFiles" Condition="NOT REMOVE~=&quot;ALL&quot;" /></InstallExecuteSequence>
+ </Package>
+</Wix>'''
+
+
+class MsiPolicyTests(unittest.TestCase):
+    def fixture(self,authoring=AUTHORING):
+        temporary=tempfile.TemporaryDirectory();self.addCleanup(temporary.cleanup)
+        folder=Path(temporary.name);source=folder/'fixture.wxs';source.write_text(authoring)
+        policy=msi_policy.create(source,folder/'stage','1.0.0','a'*40)
+        # Literal Windows Installer table evidence checks the translation rather
+        # than deriving expected rows from the policy implementation itself.
+        tables={
+            'table_names':['Property','CustomAction','InstallExecuteSequence','File','Component','Directory','ServiceInstall','ServiceControl','Registry','Environment','Wix4ServiceConfig'],
+            'properties':[['ProductName','fixture'],['Manufacturer','sarmg'],['UpgradeCode','01234567-0123-0123-0123-012345678901'],['ProductVersion','1.0.0'],['ALLUSERS','1']],
+            'actions':[['PrepareSetup',3602,'ClientExe','installer prepare-setup'],
+                       ['WixUIPrintEula_X64',65,'WixUiCa_X64','PrintEula'],['WixUIValidatePath_X64',65,'WixUiCa_X64','ValidatePath'],
+                       ['Wix4SchedServiceConfig_X64',1,'Wix4UtilCA_X64','SchedServiceConfig'],
+                       ['Wix4ExecServiceConfig_X64',3073,'Wix4UtilCA_X64','ExecServiceConfig'],
+                       ['Wix4RollbackServiceConfig_X64',3329,'Wix4UtilCA_X64','RollbackServiceConfig']],
+            'sequence':[['InstallFiles','',200],['PrepareSetup','NOT REMOVE~="ALL"',300],['InstallServices','',400],
+                        ['Wix4SchedServiceConfig_X64','NOT REMOVE~="ALL" AND VersionNT > 400',500]],
+            'other_sequences':[],
+            'services':[['SvcInstall','FixtureSvc','Fixture',16,3,32769,'','','NT AUTHORITY\\LocalService','',
+                         '--windows-service --config "[CommonAppDataFolder]Fixture"','ServiceComponent','Fixture service description']],
+            'service_controls':[['SvcControl','FixtureSvc',162,'',1,'ServiceComponent']],
+            'registry':[['GeneratedLocation',2,'Software\\sarmg\\fixture','InstallLocation','[INSTALLFOLDER]','ServiceComponent'],
+                        ['GeneratedEnabled',2,'Software\\sarmg\\fixture','Enabled','#1','ServiceComponent']],
+            'environment':[['MachinePath','=-*PATH','[~];[INSTALLFOLDER]','ServiceComponent']],
+            'remove_files':[],
+            'service_config':[['FixtureSvc','ServiceComponent',1,'restart','restart','restart',1,60,'','']],
+            'components':[['ServiceComponent','01234567-0123-0123-0123-012345678901','INSTALLFOLDER',256,'','ClientExe']],
+            'directories':[['TARGETDIR','','SourceDir'],['ProgramFiles64Folder','TARGETDIR','PFiles64'],['INSTALLFOLDER','ProgramFiles64Folder','Fixture']],
+            'template':'x64;1033','installer_version':500}
+        return policy,tables
+
+    def check(self,policy,tables):
+        msi_policy.validate(policy,tables,{'source_revision':'a'*40})
+
+    def test_current_native_effect_contract_matches_literal_table_evidence(self):
+        self.check(*self.fixture())
+
+    def test_unknown_actions_or_changed_privileges_identity_and_native_services_fail(self):
+        policy,tables=self.fixture()
+        for change in ('unknown','flags','scope','upgrade','platform','service','password','service_binary','component_flags','component_guid','component_condition','directory_parent','directory_name','directory_override'):
+            altered=copy.deepcopy(tables)
+            if change=='unknown':altered['actions'].append(['Unknown',1,'WixUiCa_X64','Arbitrary'])
+            elif change=='flags':altered['actions'][0][1]^=2048
+            elif change=='scope':altered['properties'][-1][1]='2'
+            elif change=='upgrade':altered['properties'][2][1]='different upgrade family'
+            elif change=='platform':altered['template']='Intel;1033'
+            elif change=='password':altered['services'][0][9]='hidden-password'
+            elif change=='service_binary':altered['components'][0][5]='OtherExecutable'
+            elif change=='component_flags':altered['components'][0][3]|=16
+            elif change=='component_guid':altered['components'][0][1]='ffffffff-ffff-ffff-ffff-ffffffffffff'
+            elif change=='component_condition':altered['components'][0][4]='0'
+            elif change=='directory_parent':altered['directories'][2][1]='CommonAppDataFolder'
+            elif change=='directory_name':altered['directories'][2][2]='ForeignProduct'
+            elif change=='directory_override':altered['properties'].append(['INSTALLFOLDER','[WindowsFolder]'])
+            else:altered['services'][0][10]='different runtime entry'
+            with self.subTest(change=change),self.assertRaises(ValueError):
+                self.check(policy,altered)
+
+    def test_all_native_effect_tables_reject_added_removed_or_changed_authority(self):
+        policy,tables=self.fixture()
+        changes=[('service_controls',lambda rows:rows[0].__setitem__(1,'OtherService')),
+                 ('service_controls',lambda rows:rows.clear()),
+                 ('registry',lambda rows:rows[0].__setitem__(2,'Software\\ForeignProduct')),
+                 ('registry',lambda rows:rows.append(['Foreign',2,'Software\\Foreign','Enabled','#1','ServiceComponent'])),
+                 ('environment',lambda rows:rows[0].__setitem__(1,'=-*SYSTEMROOT')),
+                 ('environment',lambda rows:rows[0].__setitem__(2,'[INSTALLFOLDER]')),
+                 ('remove_files',lambda rows:rows.append(['Cleanup','ServiceComponent','*','CommonAppDataFolder',3])),
+                 ('service_config',lambda rows:rows[0].__setitem__(0,'OtherService')),
+                 ('service_config',lambda rows:rows[0].__setitem__(8,'arbitrary executable')),
+                 ('service_config',lambda rows:rows[0].__setitem__(7,0)),
+                 ('table_names',lambda rows:rows.append('Wix4RemoveFolderEx'))]
+        for field,mutate in changes:
+            altered=copy.deepcopy(tables);mutate(altered[field])
+            with self.subTest(field=field,mutate=mutate),self.assertRaises(ValueError):self.check(policy,altered)
+
+    def test_environment_prefix_order_is_semantic_and_append_is_preserved(self):
+        policy,tables=self.fixture();tables['environment'][0][1]='*-=PATH'
+        self.check(policy,tables)
+
+    def test_changed_custom_action_condition_or_order_is_rejected(self):
+        policy,tables=self.fixture()
+        for change in ('condition','order','unexpected_dynamic_schedule','other_execution_path'):
+            altered=copy.deepcopy(tables);item=policy['constraints'][0]
+            by_name={row[0]:row for row in altered['sequence']}
+            if change=='condition':by_name[item['action']][1]='1'
+            elif change=='order':by_name[item['action']][2]=by_name[item['anchor']][2]
+            elif change=='unexpected_dynamic_schedule':altered['sequence'].append(['Wix4ExecServiceConfig_X64','1',450])
+            else:altered['other_sequences'].append(['AdminExecuteSequence','PrepareSetup','1',300])
+            with self.subTest(change=change),self.assertRaises(ValueError):self.check(policy,altered)
+
+    def test_unreviewed_authoring_cleanup_and_extensions_fail_before_packaging(self):
+        for added in ['<RemoveFile Id="ForeignCleanup" Name="*" On="both" />',
+                      '<util:RemoveFolderEx Id="ForeignCleanup" Property="STATEDIRECTORY" On="both" />']:
+            altered=AUTHORING.replace('</Component>',added+'</Component>')
+            with self.subTest(added=added),self.assertRaises(ValueError):self.fixture(altered)
+
+
+if __name__=='__main__':unittest.main()

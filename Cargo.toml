@@ -1,0 +1,44 @@
+[package]
+name = "xssi"
+version = "1.0.0"
+edition = "2024"
+rust-version = "1.99"
+license = "Apache-2.0"
+description = "Independent first-install and explicit offline product maintenance"
+publish = false
+
+[[bin]]
+name = "setup"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4.6.7", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.11"
+hkdf = "0.13"
+hmac = "0.13"
+tokio = { version = "1.53.2", features = ["macros", "rt-multi-thread"] }
+xcsc = { git = "https://github.com/isarmg/xcsc.git", rev = "c0cf985f82663199e270112a72bbf54ce48ff415", version = "=1.0.5", features = ["offline-maintenance"] }
+argon2 = { version = "0.5", features = ["std"] }
+base64 = "0.23.1"
+jsonschema = { version = "0", default-features = false }
+regex = "1"
+rustix = { version = "1.1", features = ["fs", "process"] }
+getrandom = "0.4"
+libc = "0.2"
+futures-util = "0.3"
+url = "2"
+sqlx = { version = "=0.9.0", default-features = false, features = ["runtime-tokio", "sqlite-bundled"] }
+
+uuid = { version = "1", features = ["v4"] }
+tempfile = "3"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+strip = "symbols"
+
+[lints.rust]
+unsafe_code = "deny"

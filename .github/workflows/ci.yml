@@ -1,0 +1,87 @@
+name: CI
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions: {}
+jobs:
+  windows-producer-boundaries:
+    runs-on: windows-2025
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Test actual Windows process trees and regular-file readers
+        shell: pwsh
+        run: |
+          python -m unittest discover -s tests -p test_sbom_process.py -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m unittest discover -s tests -p test_bounded_reader.py -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m unittest discover -s tests -p test_windows_inventory.py -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m unittest discover -s tests -p test_native_process.py -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+  scripts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Install pinned Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 26.7.0
+          check-latest: false
+      - name: Validate scripts and SHA256 transactions
+        run: |
+          python3 -m py_compile scripts/*.py
+          bash -n install.sh maintenance.sh upgrade.sh scripts/build-package.sh
+          sudo -- /usr/bin/env -i PATH=/usr/bin:/bin LANG=C.UTF-8 TMPDIR=/tmp /usr/bin/python3 -m unittest discover -s tests -v
+          node scripts/generate-third-party-notices.mjs --self-test
+          node --test tests/frontend_build.test.mjs
+  dependency-inventory:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Install exact toolchain
+        run: rustup toolchain install 1.99.0 --profile minimal
+      - name: Install pinned Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 26.7.0
+          check-latest: false
+      - name: Install locked dependency tools
+        run: |
+          cargo install cargo-cyclonedx --version 0.5.9 --locked
+          cargo install cargo-audit --version 0.22.2 --locked
+      - name: Exercise actual transitive inventories and license failures
+        run: python3 scripts/tests/verify-sbom-producer.py
+  rust:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Install exact toolchain
+        run: rustup toolchain install 1.99.0 --profile minimal --component rustfmt,clippy
+      - name: Validate helper core
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo test --locked --all-targets --no-run --message-format=json-render-diagnostics > "$RUNNER_TEMP/xssi-test-messages.jsonl"
+          python3 scripts/run-root-tests.py "$RUNNER_TEMP/xssi-test-messages.jsonl"
