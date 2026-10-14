@@ -66,10 +66,14 @@ export function runtimeInventory({output,root}) {
     async generateBundle(_options,bundle) {
       const rendered = new Map();
       const outputs = [];
+      const facades = [];
       for (const item of Object.values(bundle)) {
         const bytes = item.type === 'chunk' ? Buffer.from(item.code) : Buffer.from(item.source);
         outputs.push({path:item.fileName,sha256:sha(bytes)});
         if (item.type !== 'chunk') continue;
+        if (item.facadeModuleId && !Object.values(item.modules).some(module=>module.renderedLength)) {
+          facades.push({id:item.facadeModuleId,file:item.fileName});
+        }
         for (const [id,information] of Object.entries(item.modules)) {
           if (!information.renderedLength) continue;
           if (!rendered.has(id)) rendered.set(id,{files:[],code:new Set()});
@@ -77,6 +81,14 @@ export function runtimeInventory({output,root}) {
           record.files.push(item.fileName);
           if (typeof information.code === 'string' && information.code) record.code.add(information.code);
         }
+      }
+      // A multi-entry build may retain an import/re-export facade while its
+      // actual entry module is rendered in a shared chunk. Bind that facade
+      // to the same observed source; never invent an unrendered input.
+      for (const {id,file} of facades) {
+        const record=rendered.get(id);
+        if (!record || !this.getModuleInfo(id)?.isEntry) throw new Error('Entry facade has no actual rendered source');
+        if (!record.files.includes(file)) record.files.push(file);
       }
       const modules = [];
       for (const [id,record] of rendered) {

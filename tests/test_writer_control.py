@@ -14,7 +14,7 @@ class WriterControlTests(unittest.TestCase):
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
         self.root=Path(self.tmp.name);self.root.chmod(0o700)
         self.units=self.root/'units';self.units.mkdir(mode=0o755)
-        self.record=self.root/'startup.json';self.calls=[];self.fail_reload=False;self.fail_stop=None
+        self.record=self.root/'startup.json';self.calls=[];self.fail_reload=False;self.fail_stop=None;self.gc_inactive=False
         self.states={name:{'LoadState':'loaded','UnitFileState':'enabled','ActiveState':'active','SubState':'running','MainPID':'12','ControlPID':'0','Job':'','ControlGroup':'','NeedDaemonReload':'no','DropInPaths':'','ConditionResult':'yes'} for name in ('xcos.service','xcos-mediamtx.service')}
         self.loaded={name:[] for name in self.states}
         self.mock=patch.object(control,'_calls',return_value=(self.atomic,self.process));self.mock.start();self.addCleanup(self.mock.stop)
@@ -24,7 +24,10 @@ class WriterControlTests(unittest.TestCase):
     def process(self,args,**kwargs):
         self.calls.append(list(args))
         if args[0]=='/usr/bin/busctl':
-            if args[5]=='call':return json.dumps({'type':'o','data':['/org/freedesktop/systemd1/unit/'+args[-1].replace('.','_2e').replace('-','_2d')]}).encode()
+            if args[5]=='call':
+                if args[9] not in ('GetUnit','LoadUnit'):raise AssertionError('unexpected manager method')
+                if args[9]=='GetUnit' and self.gc_inactive:raise ValueError('Unit not loaded after inactive unit garbage collection')
+                return json.dumps({'type':'o','data':['/org/freedesktop/systemd1/unit/'+args[-1].replace('.','_2e').replace('-','_2d')]}).encode()
             name=args[7].split('/')[-1].replace('_2e','.').replace('_2d','-');property=args[-1]
             if property=='LoadState':value={'type':'s','data':self.states[name]['LoadState']}
             elif property=='DropInPaths':value={'type':'as','data':self.loaded[name]}
@@ -127,6 +130,48 @@ class WriterControlTests(unittest.TestCase):
         self.assertEqual(result['phase'],'stopped')
         with self.assertRaises(ValueError):control.verify_control(self.record)
         control.verify_control(self.record,allow_fresh=True)
+
+    def test_fresh_installed_inactive_units_can_be_reloaded_for_complete_guard_validation(self):
+        for value in self.states.values():value.update(LoadState='not-found',ActiveState='inactive',SubState='dead',MainPID='0',UnitFileState='')
+        control.control_writers(list(self.states),self.record,fresh=True,unit_directory=self.units)
+        for value in self.states.values():value.update(LoadState='loaded',UnitFileState='disabled')
+        self.process(['/usr/bin/systemctl','daemon-reload'])
+        self.gc_inactive=True
+        before=self.record.read_bytes();calls_before=len(self.calls)
+        result=control.verify_control(self.record,allow_fresh=True)
+        self.assertEqual(result['phase'],'stopped')
+        self.assertEqual(self.record.read_bytes(),before)
+        guard_calls=self.calls[calls_before:]
+        self.assertEqual(sum(args[5]=='call' and args[9]=='LoadUnit' for args in guard_calls if args[0]=='/usr/bin/busctl'),2)
+        self.assertTrue(all(args[0]=='/usr/bin/busctl' or args[1]=='show' for args in guard_calls))
+        self.assertTrue(all(value['MainPID']=='0' and value['UnitFileState']=='disabled' for value in self.states.values()))
+        restored=control.restore_startup(self.record)
+        self.assertEqual(restored['phase'],'startup-restored')
+        self.assertTrue(all(not (self.units/(name+'.d')/control.CONTROL_NAME).exists() for name in self.states))
+        self.assertTrue(all(value['MainPID']=='0' and value['UnitFileState']=='disabled' for value in self.states.values()))
+        self.assertTrue(all(args[0]=='/usr/bin/busctl' or args[1] in ('show','stop','daemon-reload') for args in self.calls))
+
+    def test_reloading_inactive_unit_still_requires_exact_loaded_startup_condition(self):
+        self.start_control();self.gc_inactive=True
+        before=self.record.read_bytes();actual=self.process
+        def process(arguments,**options):
+            if arguments[0]=='/usr/bin/busctl' and arguments[-1]=='Conditions':
+                return json.dumps({'type':'a(sbbsi)','data':[]}).encode()
+            return actual(arguments,**options)
+        with patch.object(control,'_calls',return_value=(self.atomic,process)):
+            with self.assertRaisesRegex(ValueError,'actual loaded startup condition differs'):
+                control.verify_control(self.record)
+        self.assertEqual(self.record.read_bytes(),before)
+        self.assertTrue(all(path.exists() for path in [self.units/(name+'.d')/control.CONTROL_NAME for name in self.states]))
+
+    def test_metadata_reload_still_rejects_an_unloaded_or_masked_writer(self):
+        self.start_control();self.gc_inactive=True
+        before=self.record.read_bytes()
+        for load_state in ('not-found','masked'):
+            self.states['xcos.service']['LoadState']=load_state
+            with self.subTest(load_state=load_state),self.assertRaises(ValueError):
+                control.verify_control(self.record)
+        self.assertEqual(self.record.read_bytes(),before)
 
 class ExitProofTests(unittest.TestCase):
     def test_main_pid_zero_is_insufficient_for_control_job_or_descendant(self):

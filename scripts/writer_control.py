@@ -152,7 +152,7 @@ def _manager_guard(service,path,permit,present,timeout):
         value=package.loads(process(prefix+arguments,timeout=timeout))
         if not isinstance(value,dict) or set(value)!={'type','data'}:raise ValueError('invalid structured system manager response')
         return value
-    reply=call(['call','org.freedesktop.systemd1','/org/freedesktop/systemd1','org.freedesktop.systemd1.Manager','GetUnit','s',service])
+    reply=call(['call','org.freedesktop.systemd1','/org/freedesktop/systemd1','org.freedesktop.systemd1.Manager','LoadUnit','s',service])
     if reply['type']!='o' or not isinstance(reply['data'],list) or len(reply['data'])!=1 or not isinstance(reply['data'][0],str) or not reply['data'][0].startswith('/org/freedesktop/systemd1/unit/'):
         raise ValueError('manager did not identify the declared writer')
     object=reply['data'][0]
