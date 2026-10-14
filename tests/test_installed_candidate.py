@@ -227,6 +227,7 @@ class CandidateBoundaryTests(unittest.TestCase):
         self.assertEqual(candidate.PRODUCTS, {
             'xscs': ('scripts/package-release.py', 'config/config.json.example'),
             'xsos': ('scripts/package-server-release.py', 'config/xsos.json.example'),
+            'xszs': ('scripts/package-server-release.py', 'config/xszs.json.example'),
         })
         text = SCRIPT.read_text()
         self.assertIn('source / PRODUCTS[product][0]', text)
@@ -244,6 +245,27 @@ class CandidateBoundaryTests(unittest.TestCase):
         self.receipt['identity']['product'] = 'xscs'
         self.save_receipt()
         with self.assertRaisesRegex(ValueError, 'product/version/revision/target'):
+            self.validate()
+
+    def test_xszs_build_metadata_is_product_bound(self):
+        self.product = 'xszs'
+        self.materials = {key.replace('xscs', 'xszs'): value.replace(b'xscs', b'xszs')
+                          for key, value in self.materials.items()}
+        self.receipt['identity']['product'] = 'xszs'
+        self.save_receipt()
+        digest, identity = self.validate()
+        self.assertEqual(digest, sha(self.payload))
+        self.assertEqual(identity['product'], 'xszs')
+        for foreign in ('xscs', 'xsos'):
+            with self.subTest(foreign=foreign):
+                self.receipt['identity']['product'] = foreign
+                self.save_receipt()
+                with self.assertRaisesRegex(ValueError, 'product/version/revision/target'):
+                    self.validate()
+        self.receipt['identity']['product'] = 'xszs'
+        self.save_receipt()
+        self.materials['xsos-identity.json'] = self.materials.pop('xszs-identity.json')
+        with self.assertRaisesRegex(ValueError, 'missing exact build metadata: xszs-identity.json'):
             self.validate()
 
     def test_new_owned_staging_directories_have_exact_modes_with_private_umask(self):

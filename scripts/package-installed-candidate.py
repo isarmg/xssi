@@ -32,6 +32,7 @@ TARGET = 'x86_64-unknown-linux-gnu'
 PRODUCTS = {
     'xscs': ('scripts/package-release.py', 'config/config.json.example'),
     'xsos': ('scripts/package-server-release.py', 'config/xsos.json.example'),
+    'xszs': ('scripts/package-server-release.py', 'config/xszs.json.example'),
 }
 
 
