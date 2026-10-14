@@ -7,6 +7,7 @@ import queue
 import signal
 import stat
 import subprocess
+import sys
 import threading
 import time
 import tomllib
@@ -96,7 +97,16 @@ def _run(command,cwd,environment,maximum,timeout,destination=None):
             status=child.wait(timeout=max(.001,deadline-time.monotonic()))
         except subprocess.TimeoutExpired:
             raise TimeoutError('dependency tool exceeded its time bound') from None
-        if status:raise subprocess.CalledProcessError(status,command)
+        if status:
+            captured=bytes(result) if destination is None else None
+            # Audit details arrive on stdout. Keep bounded output for callers, but
+            # only print public advisory identifiers, never arbitrary tool output.
+            advisories=sorted(set(re.findall(rb'\bRUSTSEC-[0-9]{4}-[0-9]{4}\b',result)))
+            if advisories:
+                identifiers=', '.join(value.decode('ascii') for value in advisories[:64])
+                suffix=' (additional IDs omitted)' if len(advisories)>64 else ''
+                print(f'dependency tool failed (status {status}); RustSec advisories: {identifiers}{suffix}',file=sys.stderr)
+            raise subprocess.CalledProcessError(status,command,output=captured)
         if output is not None:
             os.fsync(output)
             current=os.fstat(output);named=destination.lstat()

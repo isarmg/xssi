@@ -1,3 +1,5 @@
+import contextlib
+import io
 import os
 from pathlib import Path
 import subprocess
@@ -33,8 +35,10 @@ class DependencyToolTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'exceeds'):
                 sbom.run_to_file([sys.executable,'-c','import os;os.write(1,b"x"*1048576)'],root,os.environ.copy(),path,maximum=1024)
             self.assertFalse(path.exists(),'failed new stream output must be removed')
-            with self.assertRaises(subprocess.CalledProcessError):
+            with self.assertRaises(subprocess.CalledProcessError) as failure:
                 sbom.run_to_file([sys.executable,'-c','import os;os.write(1,b"partial");raise SystemExit(7)'],root,os.environ.copy(),path)
+            self.assertEqual(failure.exception.returncode,7)
+            self.assertIsNone(failure.exception.output,'streamed binary artifacts must not be copied into diagnostics')
             self.assertFalse(path.exists())
 
     def test_stream_timeout_terminates_actual_descendant_and_removes_only_its_new_output(self):
@@ -66,6 +70,54 @@ class DependencyToolTests(unittest.TestCase):
                 sbom.run([sys.executable,'-c','raise SystemExit(3)'],root,os.environ.copy())
             with self.assertRaises(ValueError):
                 sbom.run([sys.executable,'-c','import sys;sys.stdout.buffer.write(b"x"*1048576)'],root,os.environ.copy(),1024)
+
+    def test_failure_preserves_bounded_output_and_reports_only_public_advisory_ids(self):
+        payload=(b'Crate: rustls\nID: RUSTSEC-2026-0004\n'
+                 b'ID: RUSTSEC-2026-0001\nID: RUSTSEC-2026-0004\n'
+                 b'private-token=fixture-secret\nhttps://user:fixture-password@example.invalid\n'
+                 b'::warning::untrusted tool text\nRUSTSEC-evil-0001\n')
+        command=[sys.executable,'-c',f'import os;os.write(1,{payload!r});raise SystemExit(7)']
+        diagnostics=io.StringIO()
+        with tempfile.TemporaryDirectory() as temporary:
+            with contextlib.redirect_stderr(diagnostics):
+                with self.assertRaises(subprocess.CalledProcessError) as failure:
+                    sbom.run(command,Path(temporary),os.environ.copy(),maximum=len(payload))
+        self.assertEqual(failure.exception.returncode,7)
+        self.assertEqual(failure.exception.cmd,command)
+        self.assertEqual(failure.exception.output,payload)
+        self.assertEqual(failure.exception.stdout,payload)
+        self.assertEqual(diagnostics.getvalue(),
+                         'dependency tool failed (status 7); RustSec advisories: RUSTSEC-2026-0001, RUSTSEC-2026-0004\n')
+        # The exception's existing command representation is unchanged; no raw
+        # captured output is added to it or to the diagnostic log.
+
+    def test_failure_advisory_log_is_bounded_and_does_not_bypass_output_limit(self):
+        payload='\n'.join(f'RUSTSEC-2026-{number:04d}' for number in range(65)).encode()
+        command=[sys.executable,'-c',f'import os;os.write(1,{payload!r});raise SystemExit(9)']
+        diagnostics=io.StringIO()
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            with contextlib.redirect_stderr(diagnostics):
+                with self.assertRaises(subprocess.CalledProcessError) as failure:
+                    sbom.run(command,root,os.environ.copy(),maximum=len(payload))
+            self.assertEqual(failure.exception.returncode,9)
+            self.assertEqual(failure.exception.output,payload)
+            self.assertEqual(diagnostics.getvalue().count('RUSTSEC-'),64)
+            self.assertIn('additional IDs omitted',diagnostics.getvalue())
+            with self.assertRaisesRegex(ValueError,'exceeds'):
+                sbom.run(command,root,os.environ.copy(),maximum=16)
+
+    def test_failure_without_advisories_does_not_echo_captured_output(self):
+        payload=b'private credential fixture\x00\xff'
+        diagnostics=io.StringIO()
+        with tempfile.TemporaryDirectory() as temporary:
+            with contextlib.redirect_stderr(diagnostics):
+                with self.assertRaises(subprocess.CalledProcessError) as failure:
+                    sbom.run([sys.executable,'-c',f'import os;os.write(1,{payload!r});raise SystemExit(3)'],
+                             Path(temporary),os.environ.copy(),maximum=len(payload))
+        self.assertEqual(failure.exception.returncode,3)
+        self.assertEqual(failure.exception.output,payload)
+        self.assertEqual(diagnostics.getvalue(),'')
 
     def test_zero_output_small_chunks_and_process_that_closes_output_then_hangs(self):
         with tempfile.TemporaryDirectory() as temporary:
