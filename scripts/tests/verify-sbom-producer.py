@@ -4,6 +4,7 @@ import copy
 import json
 import os
 from pathlib import Path
+import runpy
 import subprocess
 import sys
 import tempfile
@@ -149,4 +150,28 @@ def verify():
         print(f"Real CycloneDX producer verified: {len(normalized(raw)['components'])} runtime dependency components, source bindings, graph edges, private paths and upstream license gates.")
 
 
-if __name__=='__main__':verify()
+def verify_own_inventory():
+    """The small regression fixture cannot replace this actual tool graph."""
+    environment={key:value for key,value in os.environ.items()
+                 if not any(part in key.upper() for part in ('TOKEN','PASSWORD','SECRET','SIGNING','PRIVATE_KEY'))}
+    revision=sbom.run(['git','rev-parse','HEAD'],ROOT,environment,maximum=4096).decode('ascii').strip()
+    if sbom.run(['git','status','--porcelain'],ROOT,environment,maximum=4096):
+        raise ValueError('actual tool inventory requires its clean committed source')
+    publisher=runpy.run_path(str(ROOT/'scripts/stage-release.py'),run_name='xssi_inventory_export')
+    with tempfile.TemporaryDirectory(prefix='xssi-own-inventory-') as temporary:
+        private=Path(temporary).resolve(strict=True);source=private/'source';stage=private/'stage'
+        (stage/'share').mkdir(parents=True)
+        publisher['export_source'](revision,source,private/'source.tar')
+        environment['CARGO_TARGET_DIR']=str(private/'no-compile-target')
+        destination=sbom.produce_runtime_cargo_bom(source,source/'Cargo.toml','xssi',stage,'xssi',
+            [(source,revision)],target=sbom.TARGET,environment=environment)
+        bom=json.loads(destination.read_bytes())
+        if any(path.suffix in ('.rlib','.rmeta','.o','.so','.dll','.exe')
+               for path in (private/'no-compile-target').rglob('*')):
+            raise AssertionError('no-compile actual inventory created compiled artifacts')
+        print(f"Actual clean XSSI Linux inventory verified: {len(bom['components'])} normal runtime dependency components; exact locked source and original license texts; no compilation.")
+
+
+if __name__=='__main__':
+    verify()
+    verify_own_inventory()

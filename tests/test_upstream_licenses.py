@@ -172,7 +172,8 @@ class UpstreamLicenses(unittest.TestCase):
     def test_reviewed_real_data_has_only_exact_sources_and_original_hashes(self):
         definitions = upstream.reviewed()
         self.assertEqual({r['name'] for r in definitions['registry']},
-                         {'jni', 'objc2-core-foundation', 'objc2-io-kit', 'rustls-platform-verifier-android'})
+                         {'jni', 'objc2-core-foundation', 'objc2-io-kit', 'rustls-platform-verifier-android',
+                          'jsonschema-regex', 'jsonschema-value', 'uuid-simd', 'vsimd'})
         for r in definitions['registry']:
             self.assertRegex(r['revision'], '^[0-9a-f]{40}$')
             for key in ('package_checksum', 'manifest_sha256', 'vcs_sha256'):

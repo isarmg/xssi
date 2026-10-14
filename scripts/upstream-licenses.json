@@ -94,6 +94,78 @@
           "sha256": "1c7cf76689c837a68ed8d704994e52a0f2940c087958f860d17f3186afbdcc0c"
         }
       ]
+    },
+    {
+      "name": "jsonschema-regex",
+      "version": "0.58.6",
+      "package_checksum": "a968fffd387b2ab005bf00c1851f5d26e90df05b6f7ad609ed0d620033cca5e7",
+      "repository": "https://github.com/Stranger6667/jsonschema",
+      "revision": "55ac1664384793c5d3b20745d3f9c169dfe2c06f",
+      "vcs_path": "crates/jsonschema-regex",
+      "manifest_sha256": "0dfc740a2dd8466356f0ef1dd7ce56d795fd67e421d4949379f8b640aad68ba0",
+      "vcs_sha256": "5cdf5be701eb41261e0c7c2598ce2fa1a8c7cbafb704d2ca36e4502204efa5d3",
+      "license": "MIT",
+      "licenses": [
+        {
+          "name": "LICENSE",
+          "source": "https://raw.githubusercontent.com/Stranger6667/jsonschema/55ac1664384793c5d3b20745d3f9c169dfe2c06f/LICENSE",
+          "sha256": "117829c3ca21efb132d81a44b55363d395ab8eea18526873bc828da4c0e5f038"
+        }
+      ]
+    },
+    {
+      "name": "jsonschema-value",
+      "version": "0.58.6",
+      "package_checksum": "39b7670345e5ce87371339d13705dbb9276b7e3e934bbe1efa2c6734a1f65a96",
+      "repository": "https://github.com/Stranger6667/jsonschema",
+      "revision": "55ac1664384793c5d3b20745d3f9c169dfe2c06f",
+      "vcs_path": "crates/jsonschema-value",
+      "manifest_sha256": "fc9363e8e19857cdd58db66ce582a24cb0dd3047684955728e67b94b46b7e8cd",
+      "vcs_sha256": "ee8166ff3889517d9b0ff72c62a57bea91d872c2d46160033de2c60340cb06dc",
+      "license": "MIT",
+      "licenses": [
+        {
+          "name": "LICENSE",
+          "source": "https://raw.githubusercontent.com/Stranger6667/jsonschema/55ac1664384793c5d3b20745d3f9c169dfe2c06f/LICENSE",
+          "sha256": "117829c3ca21efb132d81a44b55363d395ab8eea18526873bc828da4c0e5f038"
+        }
+      ]
+    },
+    {
+      "name": "uuid-simd",
+      "version": "0.8.0",
+      "package_checksum": "23b082222b4f6619906941c17eb2297fff4c2fb96cb60164170522942a200bd8",
+      "repository": "https://github.com/Nugine/simd",
+      "revision": "d74c030d9dc4f3cae02146d1f497ff62726ef09a",
+      "vcs_path": "crates/uuid-simd",
+      "manifest_sha256": "c403470724eee7edf65a6596ffb86f12814724cd67d4d34423b77e91a9a148e4",
+      "vcs_sha256": "9235ab068fdb6b50a2b0fdad57df40ed34461ea3a81e7d3a1584962f3f84e5a9",
+      "license": "MIT",
+      "licenses": [
+        {
+          "name": "LICENSE",
+          "source": "https://raw.githubusercontent.com/Nugine/simd/d74c030d9dc4f3cae02146d1f497ff62726ef09a/LICENSE",
+          "sha256": "71674605ec4c087fe9eb534e3e4f9e26eb2e4aabcd76a29fd156c6a844d44b3d"
+        }
+      ]
+    },
+    {
+      "name": "vsimd",
+      "version": "0.8.0",
+      "package_checksum": "5c3082ca00d5a5ef149bb8b555a72ae84c9c59f7250f013ac822ac2e49b19c64",
+      "repository": "https://github.com/Nugine/simd",
+      "revision": "d74c030d9dc4f3cae02146d1f497ff62726ef09a",
+      "vcs_path": "crates/vsimd",
+      "manifest_sha256": "cc626a72f9f89509460429bc40702d4b1d65118392790dea3e2cbf852884843d",
+      "vcs_sha256": "b6a479e65704d09745d31e0d86d23ca44ba673b01ddd0da81cc8ba619a92b2aa",
+      "license": "MIT",
+      "licenses": [
+        {
+          "name": "LICENSE",
+          "source": "https://raw.githubusercontent.com/Nugine/simd/d74c030d9dc4f3cae02146d1f497ff62726ef09a/LICENSE",
+          "sha256": "71674605ec4c087fe9eb534e3e4f9e26eb2e4aabcd76a29fd156c6a844d44b3d"
+        }
+      ]
     }
   ]
 }
