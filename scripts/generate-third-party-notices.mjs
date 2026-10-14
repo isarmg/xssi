@@ -49,6 +49,18 @@ const CURATED_LEGACY_LICENSE_EXPRESSIONS = new Map([
   ["MIT/Apache-2.0", "MIT OR Apache-2.0"],
   ["Unlicense/MIT", "Unlicense OR MIT"],
 ]);
+// This immutable crates.io release predates canonical SPDX metadata. Keep its
+// declaration verbatim and require the reviewed archive and both original
+// license files before interpreting this one declaration as a choice.
+const FNV_1_0_7 = {
+  declared: "Apache-2.0 / MIT",
+  expression: "Apache-2.0 OR MIT",
+  checksum: "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1",
+  licenses: new Map([
+    ["LICENSE-APACHE", "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"],
+    ["LICENSE-MIT", "65fdb6c76cd61612070c066eec9ecdb30ee74fb27859d0d9af58b9f499fd0c3e"],
+  ]),
+};
 const PERMISSIVE_SPDX_LICENSES = new Set(
   [...ALLOWED_SPDX_LICENSES].filter(identifier =>
     identifier !== "LGPL-2.1-or-later"
@@ -113,7 +125,7 @@ function generateNotices(metadataDocument, vendorPath, licensePath, rootName = "
 
   const textsByDigest = new Map();
   const packageRecords = packages.map(package_ => {
-    validateLicenseExpression(package_);
+    const expression = validateLicenseExpression(package_);
     const sourceDirectory = realpathSync(dirname(package_.manifest_path));
     assertContained(physicalVendorRoot, sourceDirectory, package_.name);
     const licenseFiles = findLicenseFiles(
@@ -121,6 +133,20 @@ function generateNotices(metadataDocument, vendorPath, licensePath, rootName = "
       sourceDirectory,
       physicalVendorRoot,
     );
+    if (isReviewedFnv(package_)) {
+      const checksumPath = join(sourceDirectory, ".cargo-checksum.json");
+      const checksumMetadata = lstatSync(checksumPath);
+      if (!checksumMetadata.isFile() || checksumMetadata.isSymbolicLink() ||
+          JSON.parse(readFileSync(checksumPath, "utf8")).package !== FNV_1_0_7.checksum) {
+        throw new Error("fnv 1.0.7 differs from its reviewed immutable archive");
+      }
+      for (const [name, digest] of FNV_1_0_7.licenses) {
+        const path = licenseFiles.find(candidate => basename(candidate) === name);
+        if (!path || createHash("sha256").update(readFileSync(path)).digest("hex") !== digest) {
+          throw new Error("fnv 1.0.7 is missing a reviewed original license text");
+        }
+      }
+    }
     const digests = licenseFiles.map(path => {
       const bytes = readFileSync(path);
       if (bytes.includes(0)) {
@@ -158,6 +184,7 @@ function generateNotices(metadataDocument, vendorPath, licensePath, rootName = "
     return {
       digests: [...new Set(digests)].sort(),
       license: package_.license || "SEE LICENSE FILE",
+      expression,
       name: package_.name,
       version: package_.version,
     };
@@ -167,7 +194,7 @@ function generateNotices(metadataDocument, vendorPath, licensePath, rootName = "
     "THIRD-PARTY LICENSES AND NOTICES",
     "",
     "This file is generated from Cargo's locked, non-development dependency " +
-      "graph. Each package entry names the declared SPDX expression and the " +
+      "graph. Each package entry preserves the declared license metadata and the " +
       "SHA-256 digest of the included license text.",
     "",
     "PACKAGE INDEX",
@@ -177,6 +204,8 @@ function generateNotices(metadataDocument, vendorPath, licensePath, rootName = "
     lines.push(
       `${record.name} ${record.version}`,
       `  Declared license: ${record.license}`,
+      ...(record.expression !== record.license ?
+        [`  Reviewed SPDX expression: ${record.expression}`] : []),
       ...record.digests.map(digest => `  License text SHA-256: ${digest}`),
       "",
     );
@@ -244,10 +273,10 @@ function validateLicenseExpression(package_) {
     );
   }
   let parsed;
+  const normalized = isReviewedFnv(package_) ? FNV_1_0_7.expression :
+    CURATED_LEGACY_LICENSE_EXPRESSIONS.get(expression) || expression;
   try {
-    parsed = parseSpdxExpression(
-      CURATED_LEGACY_LICENSE_EXPRESSIONS.get(expression) || expression,
-    );
+    parsed = parseSpdxExpression(normalized);
     validateSpdxIdentifiers(parsed);
   } catch (error) {
     throw new Error(
@@ -262,6 +291,13 @@ function validateLicenseExpression(package_) {
         `${package_.name} ${package_.version}`,
     );
   }
+  return normalized;
+}
+
+function isReviewedFnv(package_) {
+  return package_.name === "fnv" && package_.version === "1.0.7" &&
+    package_.source === "registry+https://github.com/rust-lang/crates.io-index" &&
+    package_.license === FNV_1_0_7.declared;
 }
 
 function parseSpdxExpression(expression) {
@@ -570,6 +606,22 @@ function runSelfTest() {
       !notice.includes("Dependency license")
     ) {
       throw new Error("notice self-test produced the wrong dependency set");
+    }
+
+    const fnv = {name: "fnv", version: "1.0.7",
+      source: "registry+https://github.com/rust-lang/crates.io-index",
+      license: "Apache-2.0 / MIT"};
+    if (validateLicenseExpression(fnv) !== "Apache-2.0 OR MIT" ||
+        fnv.license !== "Apache-2.0 / MIT") {
+      throw new Error("reviewed fnv metadata was not preserved and interpreted");
+    }
+    for (const altered of [{name: "unreviewed"}, {version: "1.0.8"},
+      {source: "registry+https://example.invalid/index"},
+      {license: "Apache-2.0/MIT"}, {license: "Apache-2.0 / MIT / BSD-3-Clause"}]) {
+      let refused = false;
+      try {validateLicenseExpression({...fnv, ...altered});}
+      catch {refused = true;}
+      if (!refused) throw new Error("unreviewed slash license metadata was accepted");
     }
 
     const noAttribution = structuredClone(metadata);

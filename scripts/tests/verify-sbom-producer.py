@@ -36,7 +36,7 @@ def verify():
             (directory/'src').mkdir(parents=True)
             (directory/'src/lib.rs').write_text('pub fn fixture() {}\n')
             dependencies=f'serde={{version="={versions[0]}",features=["derive"]}}\n'
-            if directory==source:dependencies+='xssi_fixture_library={path="../library"}\n'
+            if directory==source:dependencies+='xssi_fixture_library={path="../library"}\nfnv="=1.0.7"\n'
             (directory/'Cargo.toml').write_text(f'[package]\nname="{name}"\nversion="1.0.0"\nedition="2024"\nlicense="Apache-2.0"\n[dependencies]\n'+dependencies)
         (source/'rust-toolchain.toml').write_bytes((ROOT/'rust-toolchain.toml').read_bytes())
         cargo_home=private/'cargo-home';cargo_home.mkdir(mode=0o700)
@@ -50,6 +50,24 @@ def verify():
         revisions={record['id']:('1'*40 if record['name']=='xssi_fixture' else '2'*40) for record in metadata['packages'] if record['source'] is None}
         def normalized(value):return normalize(value,metadata,'xssi_fixture',revisions,[str(source),str(library)])
         normalized(raw)
+        fnv=next(record for record in metadata['packages'] if record['name']=='fnv')
+        if fnv['version']!='1.0.7' or fnv['license']!='Apache-2.0 / MIT':
+            raise AssertionError('producer did not use the reviewed original fnv metadata')
+        fnv_component=next(record for record in normalized(raw)['components'] if record['name']=='fnv')
+        fnv_licenses=fnv_component.get('licenses')
+        original_name=fnv_licenses==[{'license':{'name':'Apache-2.0 / MIT'}}]
+        reviewed_expression=(isinstance(fnv_licenses,list) and len(fnv_licenses)==1
+            and set(fnv_licenses[0])=={'expression'}
+            and fnv_licenses[0]['expression'].split()==['Apache-2.0','OR','MIT'])
+        if not original_name and not reviewed_expression:
+            raise AssertionError('fnv SBOM changed its source declaration or emitted invalid SPDX')
+        notice=(stage/'share/THIRD_PARTY_SERVER_LICENSES.txt').read_text()
+        if 'fnv 1.0.7\n  Declared license: Apache-2.0 / MIT\n  Reviewed SPDX expression: Apache-2.0 OR MIT\n' not in notice:
+            raise AssertionError('notice omitted fnv original declaration or reviewed interpretation')
+        fnv_directory=Path(fnv['manifest_path']).parent
+        for name in ('LICENSE-APACHE','LICENSE-MIT'):
+            if (fnv_directory/name).read_text().rstrip() not in notice:
+                raise AssertionError('notice omitted a complete original fnv license')
         if len(raw['components'])<5:raise AssertionError('producer fixture did not include transitive registry dependencies')
         disconnected=copy.deepcopy(raw)
         next(node for node in disconnected['dependencies'] if node['ref']==raw['metadata']['component']['bom-ref'])['dependsOn']=[]
@@ -62,6 +80,17 @@ def verify():
             result=subprocess.run(['node',str(notices),str(meta_path),str(source/'xssi-vendor'),str(source),str(output),'xssi_fixture'],
                                   cwd=source,env=environment,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=30)
             if result.returncode==0 or output.exists():raise AssertionError('invalid upstream license was accepted')
+        checksum=fnv_directory/'.cargo-checksum.json';checksum_bytes=checksum.read_bytes()
+        try:
+            altered=json.loads(checksum_bytes);altered['package']='0'*64
+            checksum.write_text(json.dumps(altered))
+            licensing(source/'xssi-cargo-metadata.json',stage/'share/unreviewed-fnv-archive.txt')
+        finally:checksum.write_bytes(checksum_bytes)
+        license_path=fnv_directory/'LICENSE-MIT';license_bytes=license_path.read_bytes()
+        try:
+            license_path.write_bytes(license_bytes+b'altered\n')
+            licensing(source/'xssi-cargo-metadata.json',stage/'share/altered-fnv-license.txt')
+        finally:license_path.write_bytes(license_bytes)
         serde=next(record for record in metadata['packages'] if record['name']=='serde')
         directory=Path(serde['manifest_path']).parent
         originals={path:path.read_bytes() for path in directory.iterdir() if path.name.startswith('LICENSE')}

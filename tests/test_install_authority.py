@@ -1,6 +1,7 @@
 """Installation authority, ordering, lock handoff and effective permission fixtures."""
 import argparse
 import contextlib
+import ctypes
 import errno
 import io
 import json
@@ -10,7 +11,8 @@ import shutil
 import subprocess
 import sys
 import unittest
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import Mock,patch
 
 import test_package as fixtures
 
@@ -49,6 +51,23 @@ class InstallAuthorityTests(unittest.TestCase):
         (self.fixture.stage/package.CHECKSUM).unlink()
         package.finalize(self.fixture.stage,self.fixture.identity,self.fixture.schema)
 
+    def permission_spec(self,**changes):
+        value={'read_files':[],'write_paths':[],'deny_paths':[],'fixture_root':False,
+               'identity':{'uid':os.geteuid(),'gid':os.getegid(),'groups':os.getgroups()},
+               'sandbox':False}
+        value.update(changes)
+        return json.dumps(value)
+
+    def direct_permission_fixture_command(self,command,identity):
+        """Keep this manager model separate from actual systemd sandbox proof."""
+        arguments=command[command.index('/usr/bin/python3'):]
+        spec=json.loads(arguments[-1])
+        self.assertTrue(spec['sandbox'])
+        self.assertEqual(spec['identity'],{'uid':identity[0],'gid':identity[1],'groups':[identity[1]]})
+        spec['sandbox']=False
+        spec['identity']['groups']=[]
+        return [*arguments[:-1],json.dumps(spec)]
+
     def test_unrecorded_stage_is_preserved_before_any_initialization(self):
         maintenance=self.root/'maintenance'
         maintenance.mkdir(parents=True,mode=0o700)
@@ -71,19 +90,27 @@ class InstallAuthorityTests(unittest.TestCase):
         self.assertFalse(self.root.exists())
 
     def test_permission_probe_accepts_only_actual_access_denial_errors(self):
-        spec=json.dumps({'read_files':[],'write_paths':[],
-                         'deny_paths':[str(self.temp)],'fixture_root':False})
+        spec=self.permission_spec(deny_paths=[str(self.temp)])
+        actual=ctypes.CDLL(None,use_errno=True).syscall;actual.restype=ctypes.c_long
+        def filtered(number):
+            def syscall(*arguments):
+                # The actual root and protected directory opens remain real;
+                # inject an error only for the forbidden write, not availability.
+                if arguments[3]._obj.flags&os.O_CREAT:
+                    ctypes.set_errno(number);return -1
+                return actual(*arguments)
+            return SimpleNamespace(syscall=Mock(side_effect=syscall))
         for number in (errno.EACCES,errno.EPERM,errno.EROFS,errno.ENOTDIR):
             with self.subTest(errno=number), \
                  patch.object(sys,'argv',['permission-probe',spec]), \
-                 patch.object(os,'open',side_effect=OSError(number,os.strerror(number))), \
+                 patch.object(ctypes,'CDLL',return_value=filtered(number)), \
                  contextlib.redirect_stdout(io.StringIO()) as output:
                 exec(compile(install.PERMISSION_PROBE,'permission-probe','exec'),{})
                 self.assertEqual(json.loads(output.getvalue())['status'],'permissions_verified')
         for number in (errno.EIO,errno.ENOENT,errno.ESTALE,errno.EMFILE):
             with self.subTest(errno=number), \
                  patch.object(sys,'argv',['permission-probe',spec]), \
-                 patch.object(os,'open',side_effect=OSError(number,os.strerror(number))), \
+                 patch.object(ctypes,'CDLL',return_value=filtered(number)), \
                  contextlib.redirect_stdout(io.StringIO()) as output:
                 with self.assertRaises(OSError) as raised:
                     exec(compile(install.PERMISSION_PROBE,'permission-probe','exec'),{})
@@ -91,8 +118,7 @@ class InstallAuthorityTests(unittest.TestCase):
                 self.assertEqual(output.getvalue(),'')
 
     def test_permission_probe_rejects_and_cleans_actual_unexpected_write(self):
-        spec=json.dumps({'read_files':[],'write_paths':[],
-                         'deny_paths':[str(self.temp)],'fixture_root':False})
+        spec=self.permission_spec(deny_paths=[str(self.temp)])
         before=set(self.temp.iterdir())
         with patch.object(sys,'argv',['permission-probe',spec]), \
              contextlib.redirect_stdout(io.StringIO()) as output:
@@ -100,6 +126,58 @@ class InstallAuthorityTests(unittest.TestCase):
                 exec(compile(install.PERMISSION_PROBE,'permission-probe','exec'),{})
             self.assertEqual(output.getvalue(),'')
         self.assertEqual(set(self.temp.iterdir()),before)
+
+    def test_permission_probe_rejects_actual_intermediate_symlink(self):
+        real=self.temp/'actual';real.mkdir()
+        resource=real/'readable';resource.write_text('preserve current material')
+        alias=self.temp/'alias';alias.symlink_to(real,target_is_directory=True)
+        spec=self.permission_spec(read_files=[str(alias/'readable')])
+        with patch.object(sys,'argv',['permission-probe',spec]),contextlib.redirect_stdout(io.StringIO()) as output:
+            with self.assertRaises(OSError) as raised:
+                exec(compile(install.PERMISSION_PROBE,'permission-probe','exec'),{})
+        self.assertEqual(raised.exception.errno,errno.ELOOP)
+        self.assertEqual(resource.read_text(),'preserve current material')
+        self.assertEqual(output.getvalue(),'')
+
+    def test_permission_probe_requires_actual_openat2_even_without_files(self):
+        spec=self.permission_spec()
+        def unavailable(*arguments):ctypes.set_errno(errno.ENOSYS);return -1
+        libc=SimpleNamespace(syscall=Mock(side_effect=unavailable))
+        with patch.object(sys,'argv',['permission-probe',spec]),patch.object(ctypes,'CDLL',return_value=libc),contextlib.redirect_stdout(io.StringIO()) as output:
+            with self.assertRaises(OSError) as raised:
+                exec(compile(install.PERMISSION_PROBE,'permission-probe','exec'),{})
+        self.assertEqual(raised.exception.errno,errno.ENOSYS)
+        self.assertEqual(output.getvalue(),'')
+
+    def test_permission_probe_rejects_wrong_process_identity(self):
+        current={'uid':os.geteuid(),'gid':os.getegid(),'groups':os.getgroups()}
+        for change in ({'uid':current['uid']+1},{'gid':current['gid']+1},
+                       {'groups':current['groups']+[max(current['groups']+[0])+1]}):
+            spec=self.permission_spec(identity={**current,**change})
+            with self.subTest(change=change),patch.object(sys,'argv',['permission-probe',spec]),contextlib.redirect_stdout(io.StringIO()) as output:
+                with self.assertRaisesRegex(RuntimeError,'process identity differs'):
+                    exec(compile(install.PERMISSION_PROBE,'permission-probe','exec'),{})
+                self.assertEqual(output.getvalue(),'')
+
+    def test_permission_probe_requires_no_new_privileges_and_empty_capabilities(self):
+        zero='0000000000000000'
+        valid={'NoNewPrivs':'1','CapPrm':zero,'CapEff':zero,'CapBnd':zero,'CapAmb':zero}
+        cases=[('NoNewPrivs','0','permits privilege gain')]
+        cases.extend((name,'0000000000000001','retains Linux capabilities') for name in valid if name!='NoNewPrivs')
+        cases.extend((name,None,'retains Linux capabilities') for name in valid if name!='NoNewPrivs')
+        for name,value,message in cases:
+            fields={**valid,name:value};status=''.join(key+':\t'+item+'\n' for key,item in fields.items() if item is not None)
+            spec=self.permission_spec(sandbox=True)
+            libc=SimpleNamespace(syscall=Mock(),prctl=Mock(return_value=1))
+            with self.subTest(field=name,value=value),patch.object(sys,'argv',['permission-probe',spec]),patch.object(ctypes,'CDLL',return_value=libc),patch.object(Path,'read_text',return_value=status),contextlib.redirect_stdout(io.StringIO()) as output:
+                with self.assertRaisesRegex(RuntimeError,message):
+                    exec(compile(install.PERMISSION_PROBE,'permission-probe','exec'),{})
+                self.assertEqual(output.getvalue(),'')
+        # /proc fields alone do not substitute for the kernel's actual prctl.
+        status=''.join(key+':\t'+item+'\n' for key,item in valid.items())
+        with patch.object(sys,'argv',['permission-probe',self.permission_spec(sandbox=True)]),patch.object(ctypes,'CDLL',return_value=SimpleNamespace(syscall=Mock(),prctl=Mock(return_value=0))),patch.object(Path,'read_text',return_value=status):
+            with self.assertRaisesRegex(RuntimeError,'permits privilege gain'):
+                exec(compile(install.PERMISSION_PROBE,'permission-probe','exec'),{})
 
     def test_json_failure_uses_machine_contract_without_echoing_bad_argument(self):
         credential='a-private-value-that-must-not-be-echoed'
@@ -441,7 +519,7 @@ class InstallAuthorityTests(unittest.TestCase):
         if os.geteuid()!=0:self.skipTest('alternate service UID requires administrator')
         self.temp.chmod(0o755)
         template=self.fixture.stage/'share/systemd/xocs.service'
-        template.write_text('[Service]\nUser=isarmg-xocs\nGroup=isarmg-xocs\nProtectSystem=strict\nProtectHome=read-only\nNoNewPrivileges=yes\nExecStart="@ROOT@/bin/xocs" --root "@ROOT@"\n')
+        template.write_text('[Service]\nUser=isarmg-xocs\nGroup=isarmg-xocs\nProtectSystem=strict\nProtectHome=read-only\nNoNewPrivileges=yes\nCapabilityBoundingSet=\nAmbientCapabilities=\nExecStart="@ROOT@/bin/xocs" --root "@ROOT@"\n')
         if interrupt_initializer:
             helper=self.fixture.stage/'libexec/setup'
             helper.write_text(helper.read_text().replace("    os.chown(data/'database-marker',a.service_uid,a.service_gid)\n",
@@ -482,7 +560,7 @@ class InstallAuthorityTests(unittest.TestCase):
             if command[0]=='/usr/bin/systemd-run':
                 self.assertTrue((units/'xocs.service.d'/CONTROL_NAME).is_file())
                 self.assertIn('--property=User=isarmg-xocs',command)
-                return actual(command[command.index('/usr/bin/python3'):],identity=(33,33))
+                return actual(self.direct_permission_fixture_command(command,(33,33)),identity=(33,33))
             return actual(command,**options)
         return arguments,units,calls,process
 
@@ -583,7 +661,7 @@ class InstallAuthorityTests(unittest.TestCase):
         journal=json.loads((self.root/'maintenance/install.json').read_text())
         return manifest,report,identity,journal,units
 
-    def test_actual_service_uid_permissions_and_final_namespace_properties(self):
+    def test_actual_service_uid_permissions_and_generated_namespace_properties(self):
         manifest,report,identity,journal,units=self.permission_fixture()
         calls=[];actual=install.process
         def process(command,**options):
@@ -597,7 +675,7 @@ class InstallAuthorityTests(unittest.TestCase):
                     self.assertIn('--property='+value,command)
                 self.assertIn('--property=ReadWritePaths='+writable_bytes(report['writable_paths'],report['readonly_paths']).decode().splitlines()[2].split('=',1)[1],command)
                 self.assertTrue(any(value.startswith('--property=ReadOnlyPaths=') and str(self.root/'config') in value for value in command))
-                return actual(command[command.index('/usr/bin/python3'):],identity=identity)
+                return actual(self.direct_permission_fixture_command(command,identity),identity=identity)
             return actual(command,**options)
         with patch.object(install,'installation_unit_roots',return_value=[units]),patch.object(install,'process',side_effect=process):
             install.verify_installation_permissions(self.root,manifest,report,identity,journal,False)

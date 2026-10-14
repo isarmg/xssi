@@ -438,42 +438,93 @@ def materialize_payload(source, destination, manifest):
         else:atomic(destination/name,value,0o644)
 
 PERMISSION_PROBE = r'''
-import errno,json,os,pathlib,stat,sys,uuid
+import ctypes,errno,json,os,pathlib,stat,sys,uuid
 spec=json.loads(sys.argv[1]);nonce='.xssi-permission-'+uuid.uuid4().hex
+expected=spec['identity']
+if (os.getresuid()!=(expected['uid'],)*3 or os.getresgid()!=(expected['gid'],)*3
+        or sorted(os.getgroups())!=sorted(expected['groups'])):
+    raise RuntimeError('permission probe process identity differs from the service contract')
+if os.uname().sysname!='Linux' or os.uname().machine!='x86_64':
+    raise RuntimeError('permission probe requires the current Linux x86_64 installation target')
+libc=ctypes.CDLL(None,use_errno=True);libc.syscall.restype=ctypes.c_long
+security=None
+if spec['sandbox']:
+    security={}
+    for line in pathlib.Path('/proc/self/status').read_text().splitlines():
+        name,separator,value=line.partition(':')
+        if name in ('NoNewPrivs','CapPrm','CapEff','CapBnd','CapAmb'):
+            if name in security:raise RuntimeError('duplicate process security field')
+            security[name]=value.strip()
+    if libc.prctl(39,0,0,0,0)!=1 or security.get('NoNewPrivs')!='1':
+        raise RuntimeError('final service sandbox permits privilege gain')
+    if any(name not in security or int(security[name],16)!=0
+           for name in ('CapPrm','CapEff','CapBnd','CapAmb')):
+        raise RuntimeError('final service sandbox retains Linux capabilities')
+class OpenHow(ctypes.Structure):
+    _fields_=[('flags',ctypes.c_uint64),('mode',ctypes.c_uint64),('resolve',ctypes.c_uint64)]
+anchor=os.open('/',os.O_RDONLY|os.O_DIRECTORY|os.O_CLOEXEC)
+def open_safe(value,flags,mode=0,*,dir_fd=None):
+    value=os.fspath(value)
+    if dir_fd is None:
+        if not value.startswith('/'):raise RuntimeError('permission probe path is not absolute')
+        value=value[1:] or '.';dir_fd=anchor
+    how=OpenHow(flags|os.O_CLOEXEC,mode,0x0e)
+    ctypes.set_errno(0)
+    descriptor=libc.syscall(437,ctypes.c_int(dir_fd),ctypes.c_char_p(os.fsencode(value)),
+                            ctypes.byref(how),ctypes.c_size_t(ctypes.sizeof(how)))
+    if descriptor<0:
+        number=ctypes.get_errno()
+        raise OSError(number,os.strerror(number))
+    return descriptor
+# BENEATH | NO_MAGICLINKS | NO_SYMLINKS is the actual runtime requirement;
+# ENOSYS is a deployment failure, never an invitation to use open/openat.
+descriptor=open_safe('/',os.O_RDONLY|os.O_DIRECTORY);os.close(descriptor)
 for value in spec['read_files']:
-    descriptor=os.open(value,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+    descriptor=open_safe(value,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
     os.close(descriptor)
 for value in spec['write_paths']:
-    path=pathlib.Path(value)
-    if path.is_dir():
-        original=path/nonce;renamed=path/(nonce+'-renamed')
-        descriptor=os.open(original,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
-        before=os.fstat(descriptor)
-        try:os.write(descriptor,b'xssi permission verification');os.fsync(descriptor)
-        finally:os.close(descriptor)
-        os.rename(original,renamed)
-        after=renamed.lstat()
-        if (before.st_dev,before.st_ino)!=(after.st_dev,after.st_ino):raise RuntimeError('probe identity changed')
-        renamed.unlink()
-    else:
-        descriptor=os.open(path,os.O_WRONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
-        os.close(descriptor)
+    parent=open_safe(value,os.O_PATH)
+    try:
+        if stat.S_ISDIR(os.fstat(parent).st_mode):
+            original=nonce;renamed=nonce+'-renamed'
+            descriptor=open_safe(original,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600,dir_fd=parent)
+            before=os.fstat(descriptor)
+            try:os.write(descriptor,b'xssi permission verification');os.fsync(descriptor)
+            finally:os.close(descriptor)
+            os.rename(original,renamed,src_dir_fd=parent,dst_dir_fd=parent)
+            after=os.stat(renamed,dir_fd=parent,follow_symlinks=False)
+            if (before.st_dev,before.st_ino)!=(after.st_dev,after.st_ino):raise RuntimeError('probe identity changed')
+            os.unlink(renamed,dir_fd=parent)
+        else:
+            descriptor=open_safe(value,os.O_WRONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+            os.close(descriptor)
+    finally:os.close(parent)
 if not spec['fixture_root']:
     for value in spec['deny_paths']:
-        path=pathlib.Path(value);created=None
+        parent=None;created=False
         try:
-            if path.is_dir():
-                created=path/nonce
-                descriptor=os.open(created,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
-            else:descriptor=os.open(path,os.O_WRONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+            parent=open_safe(value,os.O_PATH)
+            if stat.S_ISDIR(os.fstat(parent).st_mode):
+                descriptor=open_safe(nonce,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600,dir_fd=parent)
+                created=True
+            else:descriptor=open_safe(value,os.O_WRONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
         except OSError as error:
             if error.errno in (errno.EACCES,errno.EPERM,errno.EROFS,errno.ENOTDIR):continue
             raise
         else:
+            before=os.fstat(descriptor)
             os.close(descriptor)
-            if created is not None:created.unlink()
+            if created:
+                after=os.stat(nonce,dir_fd=parent,follow_symlinks=False)
+                if (before.st_dev,before.st_ino)!=(after.st_dev,after.st_ino):
+                    raise RuntimeError('unexpected write probe identity changed; preserve the replacement')
+                os.unlink(nonce,dir_fd=parent)
             raise RuntimeError('service identity can write a protected installation resource')
-print(json.dumps({'status':'permissions_verified','uid':os.geteuid()}))
+        finally:
+            if parent is not None:os.close(parent)
+os.close(anchor)
+print(json.dumps({'status':'permissions_verified','uid':os.geteuid(),'gid':os.getegid(),
+                  'groups':os.getgroups(),'openat2':'safe_paths_verified','sandbox_security':security}))
 '''
 
 def verify_installation_permissions(root,manifest,report,identity,journal,fixture):
@@ -486,7 +537,10 @@ def verify_installation_permissions(root,manifest,report,identity,journal,fixtur
     spec={'read_files':[str(path) for path in files],
           'write_paths':report['writable_paths'],
           'deny_paths':[str(path) for path in sorted(protected)],
-          'fixture_root':bool(fixture and identity[0]==0)}
+          'fixture_root':bool(fixture and identity[0]==0),
+          'identity':{'uid':identity[0],'gid':identity[1],
+                      'groups':[] if identity!=(os.geteuid(),os.getegid()) else os.getgroups()},
+          'sandbox':False}
     probe=['/usr/bin/python3','-I','-B','-c',PERMISSION_PROBE,json.dumps(spec)]
     process(probe,identity=identity)
     for service in manifest['services']:
@@ -523,13 +577,17 @@ def verify_installation_permissions(root,manifest,report,identity,journal,fixtur
                                 'PrivateMounts','NoExecPaths','ExecPaths'}:
                         properties[name]=value
         account='isarmg-'+manifest['identity']['product']
-        if properties.get('User')!=account or properties.get('Group')!=account or properties.get('ProtectSystem')!='strict':
+        if (properties.get('User')!=account or properties.get('Group')!=account
+                or properties.get('ProtectSystem')!='strict'
+                or properties.get('NoNewPrivileges') not in ('true','yes')
+                or properties.get('CapabilityBoundingSet')!='' or properties.get('AmbientCapabilities')!=''):
             raise ValueError('final service lacks its required identity or filesystem protection')
         probe_unit='xssi-install-permissions-'+journal['operation_id']+'-'+service['role']
         command=['/usr/bin/systemd-run','--quiet','--wait','--pipe','--collect','--unit',probe_unit,
                  '--property=Type=exec','--property=Restart=no']
         command.extend('--property='+name+'='+value for name,value in properties.items())
-        command.extend(probe)
+        sandbox_spec={**spec,'identity':{'uid':identity[0],'gid':identity[1],'groups':[identity[1]]},'sandbox':True}
+        command.extend(['/usr/bin/python3','-I','-B','-c',PERMISSION_PROBE,json.dumps(sandbox_spec)])
         try:process(command)
         except BaseException:
             # A timed-out systemd-run client does not stop its transient service.
