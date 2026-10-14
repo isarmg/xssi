@@ -4,6 +4,11 @@ on:
   pull_request:
   workflow_dispatch:
 permissions: {}
+
+# Superseded branch/PR CI can stop; release and manual runs stay independent.
+concurrency:
+  group: xssi-ci-${{ github.workflow }}-${{ github.event_name }}-${{ (github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref_type == 'branch')) && github.ref || github.run_id }}
+  cancel-in-progress: ${{ (github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref_type == 'branch')) }}
 jobs:
   foundation-source:
     runs-on: ubuntu-24.04
