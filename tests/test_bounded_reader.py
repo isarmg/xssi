@@ -65,11 +65,15 @@ class BoundedReaderTests(unittest.TestCase):
         os.link(file,self.root/'hardlink.json')
         with self.assertRaises(ValueError):release_sbom.load(file)
         (self.root/'hardlink.json').unlink()
-        file.write_bytes(b'{"identity":1,"identity":2}')
-        with self.assertRaisesRegex(ValueError,'duplicate'):release_sbom.load(file)
-        file.write_bytes(b'{"identity":"fixture"}')
+        # Each malformed JSON input has a fresh file. The preceding hard-link
+        # mutation must not carry directory-entry metadata into another case.
+        duplicate=self.root/'duplicate.json'
+        duplicate.write_bytes(b'{"identity":1,"identity":2}')
+        with self.assertRaisesRegex(ValueError,'duplicate'):release_sbom.load(duplicate)
+        oversized=self.root/'oversized.json'
+        oversized.write_bytes(b'{"identity":"fixture"}')
         with patch.object(release_sbom,'MAX_JSON',8):
-            with self.assertRaisesRegex(ValueError,'bounded'):release_sbom.load(file)
+            with self.assertRaisesRegex(ValueError,'bounded'):release_sbom.load(oversized)
         if os.name!='nt':
             alias=self.root/'linked.json';alias.symlink_to(file)
             with self.assertRaises(ValueError):release_sbom.load(alias)
