@@ -29,11 +29,27 @@ import package
 ROOT = Path(__file__).resolve().parents[1]
 TARGET = 'x86_64-unknown-linux-gnu'
 # Enable another product only after reviewing its staging/notices/companions.
+# Stager, config sample, exact Cargo version path, original package README.
 PRODUCTS = {
-    'xscs': ('scripts/package-release.py', 'config/config.json.example'),
-    'xsos': ('scripts/package-server-release.py', 'config/xsos.json.example'),
-    'xszs': ('scripts/package-server-release.py', 'config/xszs.json.example'),
+    'xscs': ('scripts/package-release.py', 'config/config.json.example',
+             ('workspace', 'package', 'version'), 'docs/server-release-readme.md'),
+    'xsos': ('scripts/package-server-release.py', 'config/xsos.json.example',
+             ('workspace', 'package', 'version'), 'docs/server-release-readme.md'),
+    'xszs': ('scripts/package-server-release.py', 'config/xszs.json.example',
+             ('workspace', 'package', 'version'), 'docs/server-release-readme.md'),
+    'xocs': ('scripts/package-release.py', 'deploy/linux-x86_64/config.json.example',
+             ('package', 'version'), 'README.md'),
 }
+
+
+def source_version(source, version_path):
+    value = tomllib.loads((source / 'Cargo.toml').read_text())
+    for key in version_path:
+        value = value[key]
+    if not isinstance(value, str):
+        raise ValueError('candidate requires an explicit product version')
+    return value
+
 
 
 def environment():
@@ -137,12 +153,13 @@ def build_candidate(product, source, binary, metadata, output, *, installer=ROOT
     revision = git(source, 'rev-parse', 'HEAD')
     verify_checkout(source, revision)
     pin = verify_installer(source, installer)
-    version = tomllib.loads((source / 'Cargo.toml').read_text())['workspace']['package']['version']
+    staging_script, config_sample, version_path, readme = PRODUCTS[product]
+    version = source_version(source, version_path)
     materials = read_metadata(metadata)
     digest, identity = validate_build(binary, materials, product, version, revision)
     # Load only from the already-verified clean product source. These are the
     # exact staging functions used by its annotated-tag-only formal packager.
-    spec = importlib.util.spec_from_file_location('product_release', source / PRODUCTS[product][0])
+    spec = importlib.util.spec_from_file_location('product_release', source / staging_script)
     product_release = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(product_release)
     epoch = int(git(source, 'show', '-s', '--format=%ct', revision))
@@ -163,8 +180,8 @@ def build_candidate(product, source, binary, metadata, output, *, installer=ROOT
                 write(stage / 'share' / relative, value)
         for suffix in ('state-contract', 'web-assets'):
             write(stage / 'share' / f'{suffix}.json', materials[f'{product}-{suffix}.json'])
-        write(stage / 'config/config.json.example', package.bytes_regular(source / PRODUCTS[product][1]))
-        write(stage / 'share/README.md', package.bytes_regular(source / 'docs/server-release-readme.md'))
+        write(stage / 'config/config.json.example', package.bytes_regular(source / config_sample))
+        write(stage / 'share/README.md', package.bytes_regular(source / readme))
         env = environment()
         env.update({'XSSI_SOURCE_REVISION': revision,
                     'XSSI_IDENTITY_FILE': str(inputs / f'{product}-identity.json'),

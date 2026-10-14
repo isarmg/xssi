@@ -225,13 +225,55 @@ class CandidateBoundaryTests(unittest.TestCase):
 
     def test_only_products_with_reviewed_payload_staging_are_enabled(self):
         self.assertEqual(candidate.PRODUCTS, {
-            'xscs': ('scripts/package-release.py', 'config/config.json.example'),
-            'xsos': ('scripts/package-server-release.py', 'config/xsos.json.example'),
-            'xszs': ('scripts/package-server-release.py', 'config/xszs.json.example'),
+            'xscs': ('scripts/package-release.py', 'config/config.json.example',
+                     ('workspace', 'package', 'version'), 'docs/server-release-readme.md'),
+            'xsos': ('scripts/package-server-release.py', 'config/xsos.json.example',
+                     ('workspace', 'package', 'version'), 'docs/server-release-readme.md'),
+            'xszs': ('scripts/package-server-release.py', 'config/xszs.json.example',
+                     ('workspace', 'package', 'version'), 'docs/server-release-readme.md'),
+            'xocs': ('scripts/package-release.py', 'deploy/linux-x86_64/config.json.example',
+                     ('package', 'version'), 'README.md'),
         })
         text = SCRIPT.read_text()
-        self.assertIn('source / PRODUCTS[product][0]', text)
-        self.assertIn('package.bytes_regular(source / PRODUCTS[product][1])', text)
+        self.assertIn('source / staging_script', text)
+        self.assertIn('package.bytes_regular(source / config_sample)', text)
+        self.assertIn('package.bytes_regular(source / readme)', text)
+
+    def test_explicit_version_paths_handle_package_and_workspace_together(self):
+        manifest = self.root / 'Cargo.toml'
+        # XOCS is a root package AND a workspace with no workspace.package.
+        manifest.write_text('[package]\nname = "xocs"\nversion = "1.0.1"\n[workspace]\n')
+        self.assertEqual(candidate.source_version(self.root, candidate.PRODUCTS['xocs'][2]), '1.0.1')
+        # Even conflicting workspace metadata must never change XOCS's version.
+        manifest.write_text(manifest.read_text() + '[workspace.package]\nversion = "9.9.9"\n')
+        self.assertEqual(candidate.source_version(self.root, candidate.PRODUCTS['xocs'][2]), '1.0.1')
+        for product in ('xscs', 'xsos', 'xszs'):
+            with self.subTest(product=product):
+                self.assertEqual(candidate.source_version(self.root, candidate.PRODUCTS[product][2]), '9.9.9')
+        manifest.write_text('[package]\nversion.workspace = true\n[workspace.package]\nversion = "9.9.9"\n')
+        with self.assertRaisesRegex(ValueError, 'explicit product version'):
+            candidate.source_version(self.root, candidate.PRODUCTS['xocs'][2])
+
+    def test_xocs_build_metadata_is_product_bound(self):
+        self.product = 'xocs'
+        self.materials = {key.replace('xscs', 'xocs'): value.replace(b'xscs', b'xocs')
+                          for key, value in self.materials.items()}
+        self.receipt['identity']['product'] = 'xocs'
+        self.save_receipt()
+        digest, identity = self.validate()
+        self.assertEqual(digest, sha(self.payload))
+        self.assertEqual(identity['product'], 'xocs')
+        for foreign in ('xscs', 'xsos', 'xszs'):
+            with self.subTest(foreign=foreign):
+                self.receipt['identity']['product'] = foreign
+                self.save_receipt()
+                with self.assertRaisesRegex(ValueError, 'product/version/revision/target'):
+                    self.validate()
+        self.receipt['identity']['product'] = 'xocs'
+        self.save_receipt()
+        self.materials['xscs-identity.json'] = self.materials.pop('xocs-identity.json')
+        with self.assertRaisesRegex(ValueError, 'missing exact build metadata: xocs-identity.json'):
+            self.validate()
 
     def test_xsos_build_metadata_is_product_bound(self):
         self.product = 'xsos'
