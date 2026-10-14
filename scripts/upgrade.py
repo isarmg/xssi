@@ -2,6 +2,7 @@
 """Download and OS orchestration; Rust XSSC owns upgrade and recovery."""
 import argparse
 import hashlib
+import ipaddress
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -66,6 +67,15 @@ def extract(archive,destination):
         if len(roots)!=1 or not members:raise ValueError('archive must have one product package root')
         tar.extractall(destination,members=members,filter='data')
         return destination/next(iter(roots))
+
+def readiness_address(address):
+    host,port=address.rsplit(':',1)
+    ip=ipaddress.ip_address(host[1:-1] if host.startswith('[') else host)
+    # Compare parsed addresses: expanded IPv6 and mapped IPv4 are valid binds too.
+    mapped=ip.ipv4_mapped if isinstance(ip,ipaddress.IPv6Address) else None
+    if ip.is_unspecified or (mapped is not None and mapped.is_unspecified):
+        ip=ipaddress.ip_address('::1' if ip.version==6 and mapped is None else '127.0.0.1')
+    return f'[{ip}]:{port}' if ip.version==6 else f'{ip}:{port}'
 
 def select_asset(release,product,version):
     if product not in package.PRODUCTS or not re.fullmatch(package.VERSION_PATTERN,version):
@@ -157,9 +167,7 @@ def locked_run(args,root,tool_lock_fd=None):
     if report['product']!=product or Path(report['root'])!=root or report['schema_identity']!=source['schema_identity']:
         raise ValueError('source configuration report differs from trusted installed metadata')
     protected=resources(report)
-    address=report['bind']
-    if address.startswith('0.0.0.0:'):address='127.0.0.1:'+address.rsplit(':',1)[1]
-    if address.startswith('[::]:'):address='[::1]:'+address.rsplit(':',1)[1]
+    address=readiness_address(report['bind'])
     operation=root/'maintenance/upgrades'/str(uuid.uuid4())
     directory(operation.parent,0o700)
     writers=source['services']

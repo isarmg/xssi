@@ -140,14 +140,16 @@ class FrontendReceiptTests(unittest.TestCase):
                          {'index.js': self.runtime_code, 'LICENSE': text, 'LICENSE-MPL': alternative},
                          license_id='(MPL-2.0 OR Apache-2.0)')
         runtime = next(item for item in self.generate() if item['name'] == 'runtime-lib')
+        self.assertEqual(len(runtime['licenses']), 2)
         self.assertTrue(all(item['name'] == '(MPL-2.0 OR Apache-2.0)' for item in runtime['licenses']))
         self.assertEqual(runtime['licenses'][0]['sha256'], digest(text))
         self.assertEqual((self.stage / runtime['licenses'][0]['path']).read_bytes(), text)
         self.assertEqual((self.stage / runtime['licenses'][1]['path']).read_bytes(), alternative)
+        self.assertEqual(runtime['licenses'][1]['sha256'], digest(alternative))
 
     def test_unreviewed_license_expressions_do_not_gain_an_implicit_choice(self):
         for license_id in ('MPL-2.0', '(MPL-2.0 AND Apache-2.0)',
-                           '(Unreviewed OR Apache-2.0)', '', None):
+                           '(Unreviewed OR Apache-2.0)', 'LicenseRef-Unreviewed', '', None):
             with self.subTest(license_id=license_id):
                 self.add_package('node_modules/runtime-lib', 'runtime-lib', '1.2.3',
                                  {'index.js': self.runtime_code}, license_id=license_id)
@@ -177,6 +179,9 @@ class FrontendReceiptTests(unittest.TestCase):
                 runtime = next(item for item in self.generate() if item['name'] == 'runtime-lib')
                 self.assertEqual([item['path'] for item in runtime['licenses']],
                                  ['share/licenses/frontend/runtime-lib/' + filename])
+                original = b'Actual upstream fixture MIT license and copyright.\n'
+                self.assertEqual((self.stage / runtime['licenses'][0]['path']).read_bytes(), original)
+                self.assertEqual(runtime['licenses'][0]['sha256'], digest(original))
 
     def test_arbitrary_filename_does_not_replace_an_original_license(self):
         self.add_package('node_modules/runtime-lib', 'runtime-lib', '1.2.3',

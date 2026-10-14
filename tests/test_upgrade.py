@@ -18,6 +18,19 @@ class UpgradeTests(unittest.TestCase):
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
         self.root=Path(self.tmp.name)
 
+    def test_readiness_normalizes_wildcards_and_preserves_explicit_addresses(self):
+        for source,expected in [
+            ('0.0.0.0:18105','127.0.0.1:18105'),
+            ('[::]:18105','[::1]:18105'),
+            ('[0:0:0:0:0:0:0:0]:18105','[::1]:18105'),
+            ('[::ffff:0.0.0.0]:18105','127.0.0.1:18105'),
+            ('192.168.1.20:18105','192.168.1.20:18105'),
+            ('[fd00:0:0:0:0:0:0:20]:18105','[fd00::20]:18105'),
+            ('[fe80::20%3]:18105','[fe80::20%3]:18105'),
+        ]:
+            with self.subTest(source=source):
+                self.assertEqual(upgrade.readiness_address(source),expected)
+
     def archive(self, entries):
         path=self.root/'archive.tar.gz'
         with tarfile.open(path,'w:gz') as tar:

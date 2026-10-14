@@ -31,7 +31,7 @@ sudo /opt/isarmg/xocs/maintenance.sh --root /opt/isarmg/xocs admin-reset --usern
 sudo /opt/isarmg/xocs/upgrade.sh --root /opt/isarmg/xocs --version N.N.N
 ```
 
-只读 `check` 要求写入服务已经停止；检查前后核对主进程、控制进程、待执行作业及 cgroup 后代，不改变服务或启动设置。辅助程序同时持有已声明的真实运行锁，并在私有副本中检查 SQLite。密码重置与媒体配置重建由管理员工具先持久记录操作，再为全部 writer 设置系统管理器启动条件并停止服务。密码重置从标准输入读取，成功后检查当前结构并移除本操作的启动限制，服务仍保持停止。中断时限制继续保持，可用 `--operation-id UUID` 按原事务身份重试。
+只读 `check` 要求写入服务已经停止；检查前后核对主进程、控制进程、待执行作业及 cgroup 后代，不改变服务或启动设置。辅助程序同时持有已声明的真实运行锁，并在私有副本中检查 SQLite。密码重置与媒体配置重建由管理员工具先持久记录操作，再为全部 writer 设置系统管理器启动条件并停止服务。密码重置从标准输入读取，成功后检查当前结构并移除本操作的启动限制，服务仍保持停止。中断时限制继续保持，可用 `--operation-id UUID` 按原事务身份重试。写入和检查已完成、仅恢复启动条件或材料登记中断时，重试只完成收尾，返回 `maintenance_startup_restored`，不会再次执行密码重置或读取新密码。
 
 升级先下载精确稳定版本并核对 HTTPS、大小、SHA256、哈希、权限、产品和平台。实际加载的 systemd 单元模板与路径也在停服前检查，单元合同变化会拒绝升级。XSSC 在 `ROOT/maintenance/upgrades/UUID/upgrade.json` 中记录全部 writer 的原状态和启动限制，完成系统管理器的实际加载验证后停止它们，再备份、执行源与目标当前结构只读检查、替换清单载荷、受控恢复启动、确认实际程序摘要与业务就绪。
 

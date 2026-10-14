@@ -37,7 +37,8 @@ def run(args):
         arguments=common+[args.operation];password=None
         if args.operation=='admin-reset':
             if not args.username:raise ValueError('admin-reset requires explicit username')
-            arguments+=['--username',args.username];password=credential_input()
+            arguments+=['--username',args.username]
+            if not args.operation_id:password=credential_input()
         record=None;stopped=None
         if args.operation=='check':
             if args.operation_id:raise ValueError('check cannot resume a write operation')
@@ -52,7 +53,18 @@ def run(args):
                 package.private_chain(work)
                 material_record,work=material_store.begin(root,'maintenance',lock,operation)
                 record=work/'startup-control.json'
-                writer_control.resume_control(record,[e['name'] for e in manifest['services']])
+                services=[e['name'] for e in manifest['services']]
+                control=writer_control.inspect_control(record)
+                if control['services']!=services:raise ValueError('maintenance writer set differs from its record')
+                if control['phase'] in ('restore-startup-intent','startup-restored'):
+                    # The write and its check finished before this phase. Only
+                    # finish cleanup; never replay a reset or request new secrets.
+                    writer_control.restore_startup(record)
+                    material_store.complete(root,material_record,lock,{'startup-control.json'})
+                    print(json.dumps({'status':'maintenance_startup_restored','operation_id':operation}))
+                    return
+                if args.operation=='admin-reset':password=credential_input()
+                writer_control.resume_control(record,services)
             else:
                 material_record,work=material_store.begin(root,'maintenance',lock,operation)
                 record=work/'startup-control.json'

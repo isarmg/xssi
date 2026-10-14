@@ -246,6 +246,53 @@ class InstallAuthorityTests(unittest.TestCase):
         self.assertEqual(before,(target.stat().st_ino,target.read_bytes()))
         self.assertFalse((self.root/'state').exists())
 
+    def test_corrected_configuration_precedes_credential_helper_on_retry(self):
+        self.failed_stage()
+        target=self.root/'config/config.json'
+        inode=target.stat().st_ino
+        actual=install.sealed_setup
+        commands=[]
+        class ConfigurationChecked(Exception):pass
+        def helper(path,expected,arguments,*args,**kwargs):
+            result=actual(path,expected,arguments,*args,**kwargs)
+            if 'validate-credentials' in arguments:commands.append('credentials')
+            if 'config-validate' in arguments:
+                commands.append('configuration')
+                raise ConfigurationChecked()
+            return result
+        with patch.object(install,'credential_input',return_value=b'correct horse battery\n'), \
+             patch.object(install,'sealed_setup',side_effect=helper):
+            with self.assertRaises(ConfigurationChecked):install.install(self.arguments())
+        self.assertEqual(commands,['credentials','configuration'])
+        self.assertEqual(target.stat().st_ino,inode)
+        self.assertEqual(json.loads(target.read_text()),{})
+        self.assertFalse((self.root/'state').exists())
+
+    def test_invalid_credentials_leave_recorded_configuration_retryable(self):
+        with patch.object(install,'credential_input',return_value=b'short\n'), \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            with self.assertRaisesRegex(ValueError,'subprocess failed'):
+                install.install(self.arguments())
+        self.assertEqual(output.getvalue(),'')
+        journal=json.loads((self.root/'maintenance/install.json').read_text())
+        self.assertEqual(journal['phase'],'staging')
+        self.assertTrue(journal['main_configuration']['written'])
+        self.assertFalse((self.root/'state').exists())
+        target=self.root/'config/config.json'
+        inode=target.stat().st_ino
+        actual=install.sealed_setup
+        class ConfigurationChecked(Exception):pass
+        def helper(path,expected,arguments,*args,**kwargs):
+            result=actual(path,expected,arguments,*args,**kwargs)
+            if 'config-validate' in arguments:raise ConfigurationChecked()
+            return result
+        with patch.object(install,'credential_input',return_value=b'correct horse battery\n'), \
+             patch.object(install,'sealed_setup',side_effect=helper):
+            with self.assertRaises(ConfigurationChecked):install.install(self.arguments())
+        self.assertEqual(target.stat().st_ino,inode)
+        self.assertEqual(target.read_bytes(),self.config.read_bytes())
+        self.assertFalse((self.root/'state').exists())
+
     def test_main_configuration_without_creation_record_is_never_overwritten(self):
         self.failed_stage()
         target=self.root/'config/config.json';target.write_bytes(b'{"administrator":"evidence"}')

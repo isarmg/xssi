@@ -39,7 +39,6 @@ if 'business_root' in cfg:
     business=pathlib.Path(cfg['business_root']);report['business_paths'].append(str(business));report['writable_paths'].append(str(business))
 if cfg.get('mutable_config'):
     mutable=root/'config/generated';report['config_write_paths'].append(str(mutable));report['writable_paths'].append(str(mutable))
-if report['bind']=='invalid':sys.exit(1)
 if a.command=='initialize':
     if len(sys.stdin.read().strip())<12:sys.exit(1)
     if (data/'database-marker').exists():print(json.dumps(report));sys.exit(0)
