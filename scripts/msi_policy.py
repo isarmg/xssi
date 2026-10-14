@@ -161,6 +161,12 @@ def create(source,stage,version,revision):
     product=products[0]
     if product.get('Scope')!='perMachine':raise ValueError('review installer privilege scope before packaging')
     identity={key:product.get(key) for key in ('Name','Manufacturer','UpgradeCode')}
+    # WiX 4.0.6 ParseHelper.GetAttributeGuidValue writes uppercase braced GUIDs
+    # into the MSI Property table, even when WXS authoring omits those braces.
+    # Bind the exact compiled representation without accepting another UUID.
+    try:identity['UpgradeCode']='{'+str(uuid.UUID(identity['UpgradeCode'])).upper()+'}'
+    except (ValueError,TypeError,AttributeError) as error:
+        raise ValueError('installer source requires its exact valid upgrade-family GUID') from error
     declared=product.get('Version')
     if declared!='$(var.ProductVersion)' and declared!=version:raise ValueError('installer version differs from the exact source')
     identity['Version']=version

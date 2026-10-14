@@ -82,7 +82,13 @@ class MsiPolicyTests(unittest.TestCase):
                 if altered:
                     self.assertTrue(any(row[0]=='Unreviewed' for row in actual['actions']))
                     with self.assertRaises(ValueError):self.check(policy,actual)
-                else:self.check(policy,actual)
+                else:
+                    try:self.check(policy,actual)
+                    except ValueError:
+                        public_fields={'ProductName','Manufacturer','UpgradeCode','ProductVersion','ALLUSERS','MSIINSTALLPERUSER'}
+                        print('Actual standalone fixture identity:',json.dumps({key:value for key,value in actual['properties'] if key in public_fields}))
+                        print('Declared standalone fixture identity:',json.dumps(policy['package']))
+                        raise
 
     def fixture(self,authoring=AUTHORING):
         temporary=tempfile.TemporaryDirectory();self.addCleanup(temporary.cleanup)
@@ -92,7 +98,7 @@ class MsiPolicyTests(unittest.TestCase):
         # than deriving expected rows from the policy implementation itself.
         tables={
             'table_names':['Property','CustomAction','InstallExecuteSequence','File','Component','Directory','ServiceInstall','ServiceControl','Registry','Environment','Wix4ServiceConfig'],
-            'properties':[['ProductName','fixture'],['Manufacturer','sarmg'],['UpgradeCode','01234567-0123-0123-0123-012345678901'],['ProductVersion','1.0.0'],['ALLUSERS','1']],
+            'properties':[['ProductName','fixture'],['Manufacturer','sarmg'],['UpgradeCode','{01234567-0123-0123-0123-012345678901}'],['ProductVersion','1.0.0'],['ALLUSERS','1']],
             'actions':[['PrepareSetup',3602,'ClientExe','installer prepare-setup'],
                        ['WixUIPrintEula_X64',65,'WixUiCa_X64','PrintEula'],['WixUIValidatePath_X64',65,'WixUiCa_X64','ValidatePath'],
                        ['Wix4SchedServiceConfig_X64',1,'Wix4UtilCA_X64','SchedServiceConfig'],
@@ -119,6 +125,19 @@ class MsiPolicyTests(unittest.TestCase):
 
     def test_current_native_effect_contract_matches_literal_table_evidence(self):
         self.check(*self.fixture())
+
+    def test_source_upgrade_family_uses_the_exact_wix_guid_representation(self):
+        source_guid='a0d593e5-31a3-4675-9821-be03d92ad465'
+        for authored in (source_guid,'{'+source_guid+'}'):
+            policy,tables=self.fixture(AUTHORING.replace('UpgradeCode="01234567-0123-0123-0123-012345678901"','UpgradeCode="'+authored+'"'))
+            expected='{A0D593E5-31A3-4675-9821-BE03D92AD465}'
+            self.assertEqual(policy['package']['UpgradeCode'],expected)
+            tables['properties'][2][1]=expected
+            self.check(policy,tables)
+            tables['properties'][2][1]='{F0D593E5-31A3-4675-9821-BE03D92AD465}'
+            with self.assertRaisesRegex(ValueError,'identity'):self.check(policy,tables)
+        with self.assertRaisesRegex(ValueError,'valid upgrade-family GUID'):
+            self.fixture(AUTHORING.replace('UpgradeCode="01234567-0123-0123-0123-012345678901"','UpgradeCode="invalid-family"'))
 
     def test_unknown_actions_or_changed_privileges_identity_and_native_services_fail(self):
         policy,tables=self.fixture()
