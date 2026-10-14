@@ -1,5 +1,6 @@
 """Actual regular-file reader contract on POSIX and Windows runners."""
 from pathlib import Path
+import json
 import os
 import sys
 import tempfile
@@ -18,24 +19,46 @@ class BoundedReaderTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.root=Path(temporary.name)
 
+    def observe(self,path,operation):
+        """Report original OS metadata only if a positive authority read fails."""
+        observations=[]
+        original_fstat=os.fstat
+        original_lstat=Path.lstat
+        fields=('st_dev','st_ino','st_nlink','st_size','st_mtime_ns',
+                'st_ctime_ns','st_file_attributes','st_reparse_tag')
+        def record(kind,info):
+            observations.append({'kind':kind,'metadata':{name:getattr(info,name,None) for name in fields}})
+            return info
+        def fstat(descriptor):
+            return record('descriptor',original_fstat(descriptor))
+        def lstat(candidate,*args,**kwargs):
+            info=original_lstat(candidate,*args,**kwargs)
+            return record('named',info) if candidate==path else info
+        with patch.object(release_sbom.os,'fstat',side_effect=fstat), \
+             patch.object(Path,'lstat',lstat):
+            try:return operation()
+            except Exception:
+                print('bounded-reader-stat-observation '+json.dumps(observations),file=sys.stderr)
+                raise
+
     def test_actual_regular_file_exact_limit_empty_and_overflow(self):
         file=self.root/'file'
         file.write_bytes(b'public file fixture')
-        self.assertEqual(bounded(file,19),b'public file fixture')
+        self.assertEqual(self.observe(file,lambda:bounded(file,19)),b'public file fixture')
         with self.assertRaises(ValueError):bounded(file,18)
         # Empty-file authority is an independent immutable input. Do not mix
         # the regular-file bounds case with a same-inode truncation case.
         empty=self.root/'empty'
         empty.write_bytes(b'')
-        self.assertEqual(bounded(empty,0),b'')
+        self.assertEqual(self.observe(empty,lambda:bounded(empty,0)),b'')
 
     def test_actual_binary_bytes_do_not_translate_crlf_or_treat_control_z_as_eof(self):
         import hashlib
         contents=b'public\r\nbinary\x1a\x00\xfffixture\r\n'
         file=self.root/'binary';file.write_bytes(contents)
-        self.assertEqual(bounded(file,len(contents)),contents)
-        self.assertEqual(gradle_sbom.bytes_regular(file,len(contents)),contents)
-        self.assertEqual(release_sbom.digest(file),hashlib.sha256(contents).hexdigest())
+        self.assertEqual(self.observe(file,lambda:bounded(file,len(contents))),contents)
+        self.assertEqual(self.observe(file,lambda:gradle_sbom.bytes_regular(file,len(contents))),contents)
+        self.assertEqual(self.observe(file,lambda:release_sbom.digest(file)),hashlib.sha256(contents).hexdigest())
 
     def test_directory_and_actual_hardlink_are_rejected(self):
         with self.assertRaises(ValueError):bounded(self.root,1024)
@@ -64,7 +87,7 @@ class BoundedReaderTests(unittest.TestCase):
     def test_inventory_json_rejects_links_duplicate_fields_and_oversized_documents(self):
         file=self.root/'inventory.json'
         file.write_bytes(b'{"identity":"fixture"}')
-        self.assertEqual(release_sbom.load(file),{'identity':'fixture'})
+        self.assertEqual(self.observe(file,lambda:release_sbom.load(file)),{'identity':'fixture'})
         os.link(file,self.root/'hardlink.json')
         with self.assertRaises(ValueError):release_sbom.load(file)
         (self.root/'hardlink.json').unlink()
