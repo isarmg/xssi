@@ -917,7 +917,6 @@ def install(args):
             verify_directory_seal(journal['stage_seal'],stage)
             return package.loads(sealed_setup(setup,setup_digest,[*common,*command],None,
                                               credential,tool_lock_fd=lock))
-        helper(['validate-credentials','--username',args.username],credential=password)
         config_dir=root/'config'
         managed_directory(config_dir,journal,journal_path,0o700)
         config=config_dir/'config.json'
@@ -927,6 +926,9 @@ def install(args):
         write_recorded_configuration(config,selected,journal,'main_configuration',journal,journal_path,replace=replace_input)
         journal['input_config_sha256']=hashlib.sha256(selected).hexdigest()
         save_install_journal(journal_path,journal)
+        # Credential validation loads the same product configuration context.
+        # Its defaults may be invalid until the selected install input is present.
+        helper(['--config',str(config),'validate-credentials','--username',args.username],credential=password)
         report=helper(['--config',str(config),'config-validate'])
         if report['product']!=product or Path(report['root'])!=root or report['schema_identity']!=manifest['schema_identity']:
             raise ValueError('configuration/schema report differs from verified package')
@@ -956,7 +958,9 @@ def install(args):
             if destination not in writable or destination==root or data.is_relative_to(destination) or any(destination==path or path.is_relative_to(destination) or (destination.is_relative_to(path) and path!=data) for path in private_directories) or any(destination.is_relative_to(path) or path.is_relative_to(destination) for path in private_files) or any(destination.is_relative_to(root/name) or (root/name).is_relative_to(destination) for name in ('config','logs','run','bin','libexec','share','maintenance')):
                 raise ValueError('business data cannot broaden or relax private state/configuration')
         for destination in shared:
-            if destination not in business or destination not in writable or destination not in declared or destination.is_relative_to(data) or data.is_relative_to(destination) or any(destination.is_relative_to(root/name) or (root/name).is_relative_to(destination) for name in ('config','logs','run','bin','libexec','share','maintenance')):
+            # Shared business data is intentionally separate from private-state
+            # backup roots; its exact business/writable declarations are authority.
+            if destination not in business or destination not in writable or destination.is_relative_to(data) or data.is_relative_to(destination) or any(destination.is_relative_to(root/name) or (root/name).is_relative_to(destination) for name in ('config','logs','run','bin','libexec','share','maintenance')):
                 raise ValueError('shared data cannot broaden or relax private state/configuration')
         retained_allowed={data}
         for destination in business:

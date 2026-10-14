@@ -9,7 +9,7 @@ Type=simple
 User=isarmg-@PRODUCT@
 Group=isarmg-@PRODUCT@
 Environment=TZ=UTC
-EnvironmentFile="@ROOT@/config/mediamtx.env"
+EnvironmentFile=@ROOT@/config/mediamtx.env
 ExecStart="@ROOT@/bin/mediamtx" "@ROOT@/config/mediamtx.yml"
 UMask=0077
 NoNewPrivileges=true

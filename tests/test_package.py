@@ -26,14 +26,15 @@ try:
     else:raise RuntimeError('parent tool lock was not held across helper')
 finally:os.close(another)
 fcntl.flock(a.tool_lock_fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+cfg=json.loads(pathlib.Path(a.config or root/'config/config.json').read_text());data=pathlib.Path(cfg.get('data_dir',str(root/'state')))
+if cfg.get('bind')=='invalid':sys.exit(1)
 if a.command=='validate-credentials':
     if len(sys.stdin.read().strip())<12:sys.exit(1)
     print('{}');sys.exit(0)
-cfg=json.loads(pathlib.Path(a.config or root/'config/config.json').read_text());data=pathlib.Path(cfg.get('data_dir',str(root/'state')))
 report={'product':a.product,'root':str(root),'data_dir':str(data),'bind':cfg.get('bind','127.0.0.1:18104'),'state_paths':[str(root/'config/config.json'),str(data),str(root/'logs')],'private_directories':[str(data),str(root/'logs'),str(root/'run')],'private_files':[str(data/'database-marker')],'shared_paths':[],'business_paths':[],'writable_paths':[str(data),str(root/'logs'),str(root/'run')],'readonly_paths':[str(root/'config')],'config_write_paths':[],'schema_identity':{'application':a.product,'application_version':'1.0.0','schema_revision':1,'schema_sha256':'a'*64}}
 for name in cfg.get('readonly_configuration',[]):report['readonly_paths'].append(str(root/'config'/name))
 if 'shared_root' in cfg:
-    shared=pathlib.Path(cfg['shared_root']);report['state_paths'].append(str(shared));report['shared_paths'].append(str(shared));report['business_paths'].append(str(shared));report['writable_paths'].append(str(shared))
+    shared=pathlib.Path(cfg['shared_root']);report['shared_paths'].append(str(shared));report['business_paths'].append(str(shared));report['writable_paths'].append(str(shared))
 if 'business_root' in cfg:
     business=pathlib.Path(cfg['business_root']);report['business_paths'].append(str(business));report['writable_paths'].append(str(business))
 if cfg.get('mutable_config'):
@@ -111,6 +112,27 @@ class PackageTests(unittest.TestCase):
         before=(root/'state/database-marker').read_bytes()
         self.assertNotEqual(self.invoke(root,config).returncode,0)
         self.assertEqual((root/'state/database-marker').read_bytes(),before)
+
+    def test_selected_configuration_exists_before_credential_context_validation(self):
+        root=self.temp/'installed';config=self.temp/'chosen.json'
+        selected={'bind':'127.0.0.1:19127'}
+        config.write_text(json.dumps(selected))
+        completed=self.invoke(root,config)
+        self.assertEqual(completed.returncode,0,completed.stderr.decode())
+        self.assertEqual(json.loads((root/'config/config.json').read_text()),selected)
+        journal=json.loads((root/'maintenance/install.json').read_text())
+        self.assertEqual(journal['main_configuration']['sha256'],hashlib.sha256(config.read_bytes()).hexdigest())
+        self.assertEqual(journal['phase'],'complete')
+
+    def test_invalid_credentials_with_valid_configuration_do_not_initialize_state(self):
+        root=self.temp/'installed';config=self.temp/'chosen.json';config.write_text('{}')
+        result=subprocess.run([sys.executable,'-I','-B',str(SOURCE/'tests/install_fixture.py'),
+            '--package',str(self.stage),'--root',str(root),'--config',str(config)],
+            input=b'short\n',capture_output=True)
+        self.assertNotEqual(result.returncode,0)
+        self.assertFalse((root/'state').exists())
+        self.assertFalse((root/'bin').exists())
+        self.assertFalse((root/'run/fixture-systemd').exists())
 
     def test_modified_payload_never_executes_or_creates_install_root(self):
         (self.stage/'libexec/setup').write_text('#!/bin/sh\ntouch /tmp/never-authorized-xssi-marker\n')
