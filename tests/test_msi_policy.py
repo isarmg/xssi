@@ -88,6 +88,8 @@ class MsiPolicyTests(unittest.TestCase):
                         public_fields={'ProductName','Manufacturer','UpgradeCode','ProductVersion','ALLUSERS','MSIINSTALLPERUSER'}
                         print('Actual standalone fixture identity:',json.dumps({key:value for key,value in actual['properties'] if key in public_fields}))
                         print('Declared standalone fixture identity:',json.dumps(policy['package']))
+                        print('Actual standalone fixture tables:',json.dumps(actual,sort_keys=True))
+                        print('Declared standalone fixture policy:',json.dumps(policy,sort_keys=True))
                         raise
 
     def fixture(self,authoring=AUTHORING):
