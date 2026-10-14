@@ -33,6 +33,7 @@ AUTHORING='''<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
     <ServiceControl Id="SvcControl" Name="FixtureSvc" Stop="both" Remove="uninstall" Wait="yes" />
    </Component>
   </Directory></StandardDirectory>
+  <Feature Id="ProductFeature" Level="1"><ComponentRef Id="ServiceComponent" /></Feature>
   <CustomAction Id="PrepareSetup" FileRef="ClientExe" ExeCommand="installer prepare-setup" Execute="commit" Impersonate="no" Return="check" />
   <InstallExecuteSequence><Custom Action="PrepareSetup" After="InstallFiles" Condition="NOT REMOVE~=&quot;ALL&quot;" /></InstallExecuteSequence>
  </Package>
