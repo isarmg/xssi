@@ -17,6 +17,7 @@ AUTHORING='''<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
  xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
  <Package Name="fixture" Manufacturer="sarmg" UpgradeCode="01234567-0123-0123-0123-012345678901"
  Version="$(var.ProductVersion)" Scope="perMachine" InstallerVersion="500">
+  <Property Id="WINDOWSBUILD"><RegistrySearch Id="WindowsBuild" Root="HKLM" Key="SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion" Name="CurrentBuildNumber" Type="raw" Bitness="always64" /></Property>
   <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
   <StandardDirectory Id="ProgramFiles64Folder"><Directory Id="INSTALLFOLDER" Name="Fixture">
    <Component Id="ServiceComponent" Guid="01234567-0123-0123-0123-012345678901" Bitness="always64">
@@ -78,6 +79,9 @@ class MsiPolicyTests(unittest.TestCase):
                 self.assertEqual(len(actual['registry']),2)
                 self.assertTrue(all(isinstance(row,list) and len(row)==6 for row in actual['registry']))
                 self.assertEqual(actual['remove_files'],[])
+                self.assertEqual(actual['app_search'],[['WINDOWSBUILD','WindowsBuild']])
+                self.assertEqual(actual['registry_search'],[['WindowsBuild','2','SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion','CurrentBuildNumber','18']])
+                self.assertEqual(actual['file_signatures'],[])
                 self.assertEqual((actual['template'],actual['installer_version']),('x64;1033',500))
                 if altered:
                     self.assertTrue(any(row[0]=='Unreviewed' for row in actual['actions']))
@@ -99,7 +103,7 @@ class MsiPolicyTests(unittest.TestCase):
         # Literal Windows Installer table evidence checks the translation rather
         # than deriving expected rows from the policy implementation itself.
         tables={
-            'table_names':['Property','CustomAction','InstallExecuteSequence','File','Component','Directory','ServiceInstall','ServiceControl','Registry','Environment','Wix4ServiceConfig','CheckBox','ListBox'],
+            'table_names':['Property','CustomAction','InstallExecuteSequence','File','Component','Directory','ServiceInstall','ServiceControl','Registry','Environment','Wix4ServiceConfig','CheckBox','ListBox','AppSearch','RegLocator','Signature'],
             'properties':[['ProductName','fixture'],['Manufacturer','sarmg'],['UpgradeCode','{01234567-0123-0123-0123-012345678901}'],['ProductVersion','1.0.0'],['ALLUSERS','1']],
             'actions':[['PrepareSetup',3602,'ClientExe','installer prepare-setup'],
                        ['WixUIPrintEula_X64',65,'WixUiCa_X64','PrintEula'],['WixUIValidatePath_X64',65,'WixUiCa_X64','ValidatePath'],
@@ -117,6 +121,9 @@ class MsiPolicyTests(unittest.TestCase):
             'environment':[['MachinePath','=-*PATH','[~];[INSTALLFOLDER]','ServiceComponent']],
             'ui_checkboxes':[['LicenseAccepted','1'],['WIXUI_EXITDIALOGOPTIONALCHECKBOX','1']],
             'ui_listboxes':[],
+            'app_search':[['WINDOWSBUILD','WindowsBuild']],
+            'registry_search':[['WindowsBuild',2,'SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion','CurrentBuildNumber',18]],
+            'file_signatures':[],
             'remove_files':[],
             'service_config':[['FixtureSvc','ServiceComponent',1,'restart','restart','restart',1,60,'','']],
             'components':[['ServiceComponent','01234567-0123-0123-0123-012345678901','INSTALLFOLDER',256,'','ClientExe']],
@@ -129,6 +136,29 @@ class MsiPolicyTests(unittest.TestCase):
 
     def test_current_native_effect_contract_matches_literal_table_evidence(self):
         self.check(*self.fixture())
+
+    def test_raw_registry_search_binds_property_target_bitness_and_empty_signature_table(self):
+        policy,tables=self.fixture()
+        changes=[('app_search',lambda rows:rows[0].__setitem__(0,'INSTALLFOLDER')),
+                 ('app_search',lambda rows:rows[0].__setitem__(1,'ForeignSearch')),
+                 ('app_search',lambda rows:rows.clear()),
+                 ('app_search',lambda rows:rows.append(['FOREIGN','WindowsBuild'])),
+                 ('registry_search',lambda rows:rows[0].__setitem__(0,'ForeignSearch')),
+                 ('registry_search',lambda rows:rows[0].__setitem__(1,1)),
+                 ('registry_search',lambda rows:rows[0].__setitem__(2,'SOFTWARE\\ForeignProduct')),
+                 ('registry_search',lambda rows:rows[0].__setitem__(3,'ForeignValue')),
+                 ('registry_search',lambda rows:rows[0].__setitem__(4,2)),
+                 ('registry_search',lambda rows:rows[0].__setitem__(4,17)),
+                 ('registry_search',lambda rows:rows.clear()),
+                 ('registry_search',lambda rows:rows.append(['ForeignSearch',2,'SOFTWARE\\ForeignProduct','Value',18])),
+                 ('file_signatures',lambda rows:rows.append(['WindowsBuild','arbitrary.exe','','','','','','','']))]
+        for field,mutate in changes:
+            altered=copy.deepcopy(tables);mutate(altered[field])
+            with self.subTest(field=field,mutate=mutate),self.assertRaisesRegex(ValueError,'lookup semantics'):
+                self.check(policy,altered)
+        for replacement in ('Type="file" Bitness="always64"','Type="raw" Bitness="always32"','Type="raw"'):
+            with self.subTest(replacement=replacement),self.assertRaisesRegex(ValueError,'registry search semantics'):
+                self.fixture(AUTHORING.replace('Type="raw" Bitness="always64"',replacement))
 
     def test_source_upgrade_family_uses_the_exact_wix_guid_representation(self):
         source_guid='a0d593e5-31a3-4675-9821-be03d92ad465'

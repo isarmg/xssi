@@ -16,7 +16,7 @@ CORE='http://wixtoolset.org/schemas/v4/wxs'
 STANDARD_DIRECTORIES={'TARGETDIR':'SourceDir','ProgramFiles64Folder':'PFiles64','CommonAppDataFolder':'CommApp','ProgramMenuFolder':'PMenu'}
 # Current native authoring uses these standard payload/UI tables. Any other
 # table needs an explicit, reviewed effects contract before it may be shipped.
-ALLOWED_TABLES=set('ActionText AdminExecuteSequence AdminUISequence AdvtExecuteSequence AppSearch Binary CheckBox Component Control ControlCondition ControlEvent CustomAction Dialog Directory Environment Error EventMapping Feature FeatureComponents File InstallExecuteSequence InstallUISequence LaunchCondition ListBox Media MsiFileHash Property RadioButton Registry RegLocator RemoveFile ServiceControl ServiceInstall TextStyle UIText Upgrade Wix4ServiceConfig _Validation'.split())
+ALLOWED_TABLES=set('ActionText AdminExecuteSequence AdminUISequence AdvtExecuteSequence AppSearch Binary CheckBox Component Control ControlCondition ControlEvent CustomAction Dialog Directory Environment Error EventMapping Feature FeatureComponents File InstallExecuteSequence InstallUISequence LaunchCondition ListBox Media MsiFileHash Property RadioButton Registry RegLocator RemoveFile ServiceControl ServiceInstall Signature TextStyle UIText Upgrade Wix4ServiceConfig _Validation'.split())
 
 
 def name(node):return node.tag.rsplit('}',1)[-1]
@@ -54,7 +54,7 @@ def environment_name(value):
 
 def effects(tree):
     parents={child:parent for parent in tree.iter() for child in parent}
-    result={key:[] for key in ('services','service_controls','registry','environment','remove_files','service_config','service_components','directories')}
+    result={key:[] for key in ('services','service_controls','registry','environment','remove_files','service_config','service_components','directories','app_search','registry_search','file_signatures')}
     result['directories'].append(['TARGETDIR','','SourceDir'])
     for node in tree.iter():
         kind=name(node)
@@ -99,6 +99,23 @@ def effects(tree):
                     if value not in ('install','uninstall','both'):raise ValueError('invalid service-control phase')
                     event+=(install if value in ('install','both') else 0)+(uninstall if value in ('uninstall','both') else 0)
             result['service_controls'].append([node.get('Id'),node.get('Name'),event,'',1 if boolean(node,'Wait','yes') else 0,owner(node,parents,'Component').get('Id')])
+        elif kind=='RegistrySearch':
+            attributes(node,('Id','Root','Key','Name','Type','Bitness'))
+            parent=parents.get(node)
+            if parent is None or name(parent)!='Property':
+                raise ValueError('raw registry search requires its exact source property')
+            attributes(parent,('Id',))
+            # Current searches read only explicit x64 raw registry values.
+            # MSI Type 2 | 16 selects that operation; a Signature row would
+            # change the same reference into a file lookup (Microsoft RegLocator).
+            if node.get('Type')!='raw' or node.get('Bitness')!='always64' or len(node):
+                raise ValueError('review non-current native registry search semantics')
+            identity=node.get('Id');property_=parent.get('Id');key=node.get('Key')
+            root={'HKCR':0,'HKCU':1,'HKLM':2,'HKU':3}.get(node.get('Root'))
+            if not identity or not property_ or not key or root is None:
+                raise ValueError('registry search omits its exact identity or target')
+            result['app_search'].append([property_,identity])
+            result['registry_search'].append([identity,root,key,node.get('Name',''),18])
         elif kind=='RegistryValue':
             attributes(node,('Id','Root','Key','Name','Type','Value','KeyPath'))
             value=node.get('Value','');value_type=node.get('Type')
@@ -212,7 +229,7 @@ def create(source,stage,version,revision):
 
 
 def validate(policy,tables,identity):
-    sbom.fields(policy,['format_version','source_revision','source_sha256','package','installer_version','platform','actions','constraints','services','service_controls','registry','environment','remove_files','service_config','service_components','directories','ui_checkboxes','ui_listboxes'])
+    sbom.fields(policy,['format_version','source_revision','source_sha256','package','installer_version','platform','actions','constraints','services','service_controls','registry','environment','remove_files','service_config','service_components','directories','ui_checkboxes','ui_listboxes','app_search','registry_search','file_signatures'])
     if policy['format_version']!=1 or policy['source_revision']!=identity['source_revision']:
         raise ValueError('MSI policy differs from its exact current source identity')
     properties=dict(tables['properties'])
@@ -227,6 +244,10 @@ def validate(policy,tables,identity):
     names=tables['table_names']
     if len(set(names))!=len(names) or set(names)-ALLOWED_TABLES:
         raise ValueError('MSI contains an unreviewed installer effects table')
+    searches=[[row[0],int(row[1]),row[2],row[3],int(row[4])] for row in tables['registry_search']]
+    for field,actual in [('app_search',tables['app_search']),('registry_search',searches),('file_signatures',tables['file_signatures'])]:
+        if sorted_rows(actual)!=policy[field]:
+            raise ValueError('MSI '+field+' lookup semantics differ from current source authoring')
     for field in ('ui_checkboxes','ui_listboxes'):
         if sorted_rows(tables[field])!=policy[field]:
             raise ValueError('MSI '+field+' data differs from the fixed selected SDK source')
