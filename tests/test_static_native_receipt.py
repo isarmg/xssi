@@ -118,7 +118,9 @@ class StaticNativeTests(unittest.TestCase):
             if 'rev-parse' in arguments:return 'e456309491fd875487bf02b8a0dca76c1b1b00cc\n'
             if 'diff' in arguments:return ''
             if 'remote' in arguments:return 'https://github.com/microsoft/vcpkg.git\n'
-        if arguments[1:3]==['--libs','--static']:return '-lavformat -lavcodec -lavutil -lbcrypt -lsecur32 -lws2_32\n'
+        # Replay the platform dependencies reported by the actual pinned
+        # FFmpeg 9.0.2 vcpkg Windows build, including Schannel's CNG library.
+        if arguments[1:3]==['--libs','--static']:return '-lavformat -lavcodec -lavutil -lsecur32 -lncrypt -lcrypt32 -lws2_32 -lmfuuid -lstrmiids -lole32 -luser32 -lbcrypt\n'
         raise AssertionError('unexpected provider operation: '+repr(arguments))
 
     def test_windows_source_copyright_config_and_only_runtime_graph_are_bound(self):
@@ -137,6 +139,23 @@ class StaticNativeTests(unittest.TestCase):
         self.assertNotIn('pkgconf',json.dumps(components))
         self.assertEqual(components[1]['delivery'],'platform')
         self.assertEqual(components[1]['files'],[])
+        provenance=json.loads((self.stage/'share/build-inputs/native/provenance.json').read_text())
+        self.assertEqual(set(provenance['static_libraries']),
+                         {'avformat','avcodec','avutil','secur32','ncrypt','crypt32',
+                          'ws2_32','mfuuid','strmiids','ole32','user32','bcrypt'})
+
+    def test_windows_observed_schannel_closure_still_rejects_nonplatform_libraries(self):
+        work,_,_,definitions=self.windows_fixture()
+        for library in ('crypto','private-media','ncrypt-helper','ncrypt.lib'):
+            def command(arguments,cwd,env,maximum=4*1024*1024):
+                output=self.windows_command(arguments,cwd,env,maximum)
+                if arguments[1:3]==['--libs','--static']:
+                    output=output.rstrip()+' -l'+library+'\n'
+                return output
+            with self.subTest(library=library),mock.patch.object(native,'command',side_effect=command):
+                with self.assertRaisesRegex(ValueError,'unreviewed nonplatform dependency'):
+                    native.record_windows(work,self.stage,definitions,self.targets,'share',{})
+            self.assertFalse((self.stage/'share/build-inputs/native/provenance.json').exists())
 
     def test_windows_changed_archive_license_source_and_build_features_are_rejected(self):
         work,prefix,vcpkg,definitions=self.windows_fixture()

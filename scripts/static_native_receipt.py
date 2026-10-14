@@ -18,7 +18,9 @@ from sbom import run
 MAX_INPUT=256*1024*1024
 FFMPEG_LIBRARIES={'avformat','avcodec','avutil'}
 UNIX_SYSTEM={'c','m','dl','pthread','rt','gcc','gcc_s'}
-WINDOWS_SYSTEM={'advapi32','bcrypt','crypt32','gdi32','kernel32','ole32','oleaut32','secur32','shell32','user32','uuid','vfw32','ws2_32','strmiids','mfplat','mfuuid','dxva2','d3d11','d3d12','dxgi','avrt'}
+# Schannel's CNG key storage uses the Windows SDK Ncrypt.lib/Ncrypt.dll:
+# https://learn.microsoft.com/windows/win32/api/ncrypt/nf-ncrypt-ncryptopenstorageprovider
+WINDOWS_SYSTEM={'advapi32','bcrypt','crypt32','gdi32','kernel32','ncrypt','ole32','oleaut32','secur32','shell32','user32','uuid','vfw32','ws2_32','strmiids','mfplat','mfuuid','dxva2','d3d11','d3d12','dxgi','avrt'}
 DEBIAN_HOSTS={'deb.debian.org','security.debian.org','archive.debian.org','snapshot.debian.org','archive.ubuntu.com','security.ubuntu.com','ports.ubuntu.com'}
 
 
