@@ -223,8 +223,28 @@ class CandidateBoundaryTests(unittest.TestCase):
         self.assertNotIn("'refs/tags/", text)
         self.assertNotIn('product_release.main(', text)
 
-    def test_only_the_product_with_reviewed_payload_staging_is_enabled(self):
-        self.assertEqual(candidate.PRODUCTS, {'xscs'})
+    def test_only_products_with_reviewed_payload_staging_are_enabled(self):
+        self.assertEqual(candidate.PRODUCTS, {
+            'xscs': ('scripts/package-release.py', 'config/config.json.example'),
+            'xsos': ('scripts/package-server-release.py', 'config/xsos.json.example'),
+        })
+        text = SCRIPT.read_text()
+        self.assertIn('source / PRODUCTS[product][0]', text)
+        self.assertIn('package.bytes_regular(source / PRODUCTS[product][1])', text)
+
+    def test_xsos_build_metadata_is_product_bound(self):
+        self.product = 'xsos'
+        self.materials = {key.replace('xscs', 'xsos'): value.replace(b'xscs', b'xsos')
+                          for key, value in self.materials.items()}
+        self.receipt['identity']['product'] = 'xsos'
+        self.save_receipt()
+        digest, identity = self.validate()
+        self.assertEqual(digest, sha(self.payload))
+        self.assertEqual(identity['product'], 'xsos')
+        self.receipt['identity']['product'] = 'xscs'
+        self.save_receipt()
+        with self.assertRaisesRegex(ValueError, 'product/version/revision/target'):
+            self.validate()
 
     def test_new_owned_staging_directories_have_exact_modes_with_private_umask(self):
         old = os.umask(0o077)
