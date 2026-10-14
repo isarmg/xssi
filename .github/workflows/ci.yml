@@ -5,6 +5,17 @@ on:
   workflow_dispatch:
 permissions: {}
 jobs:
+  foundation-source:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Verify declared Linux helper against exact official foundation source
+        run: python3 scripts/verify-foundation.py
   windows-producer-boundaries:
     runs-on: windows-2025
     timeout-minutes: 10

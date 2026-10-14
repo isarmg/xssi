@@ -54,7 +54,7 @@ def _state(service,timeout):
 
 def _read(record):
     data=package.loads(package.bytes_regular(record,1024*1024,(0o600,os.geteuid())))
-    if set(data)!={'version','operation_id','record_parent','permit','phase','services','before','writers'} or type(data['version']) is not int or data['version']!=2 or not isinstance(data.get('writers'),list) or not 0<=len(data['writers'])<=16:
+    if set(data)!={'version','operation_id','record_parent','permit','phase','services','before','writers'} or type(data['version']) is not int or data['version']!=1 or not isinstance(data.get('writers'),list) or not 0<=len(data['writers'])<=16:
         raise ValueError('invalid startup control record')
     operation=uuid.UUID(data['operation_id'])
     if operation.version!=4 or str(operation)!=data['operation_id'] or data['phase'] not in ('control-intent','control-written','stopped','control-failed','restore-startup-intent','startup-restored'):
@@ -195,7 +195,7 @@ def control_writers(services,record,timeout=120,fresh=False,unit_directory=Path(
     operation=str(uuid.uuid4());permit=record.parent/('startup-permit-'+operation)
     if permit.exists() or permit.is_symlink():raise ValueError('startup permit already exists')
     before={service:_state(service,timeout) for service in services}
-    data={'version':2,'operation_id':operation,'record_parent':_identity(parent),'permit':str(permit),'phase':'control-intent','services':services,'before':before,'writers':[]}
+    data={'version':1,'operation_id':operation,'record_parent':_identity(parent),'permit':str(permit),'phase':'control-intent','services':services,'before':before,'writers':[]}
     _save(record,data)
     _,process=_calls()
     try:

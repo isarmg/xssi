@@ -29,6 +29,7 @@ jobs:
           cargo install cargo-audit --version 0.22.2 --locked
       - name: Validate this actual source
         run: |
+          python3 scripts/verify-foundation.py
           cargo fmt --all -- --check
           cargo clippy --locked --all-targets -- -D warnings
           cargo test --locked --all-targets --no-run --message-format=json-render-diagnostics > "$RUNNER_TEMP/xssi-test-messages.jsonl"

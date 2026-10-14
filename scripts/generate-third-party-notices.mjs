@@ -36,6 +36,7 @@ const ALLOWED_SPDX_LICENSES = new Set([
   "ISC",
   "LGPL-2.1-or-later",
   "MIT",
+  "MIT-0",
   "OpenSSL",
   "Unicode-3.0",
   "Unlicense",
@@ -569,6 +570,14 @@ function runSelfTest() {
       !notice.includes("Dependency license")
     ) {
       throw new Error("notice self-test produced the wrong dependency set");
+    }
+
+    const noAttribution = structuredClone(metadata);
+    noAttribution.packages[1].license = "MIT-0";
+    const noAttributionNotice = generateNotices(noAttribution, vendor, licenses);
+    if (!noAttributionNotice.includes("MIT-0") ||
+        !noAttributionNotice.includes("Dependency license")) {
+      throw new Error("notice self-test did not preserve the MIT-0 upstream text");
     }
 
     const unknown = structuredClone(metadata);

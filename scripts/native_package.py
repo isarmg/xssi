@@ -94,6 +94,7 @@ def msi_payload(artifact,private,*,include_embedded=False):
     # WiX reads tables and cabinet/Binary streams without executing installation
     # actions; the decompiled names supply the actual installation file mapping.
     private=Path(private);private.mkdir(parents=True,exist_ok=True)
+    private=private.resolve(strict=True)
     extraction=private/'extracted';extraction.mkdir()
     document=private/'installer.wxs'
     run([tool('wix'),'msi','decompile','-x',str(extraction),'-o',str(document),str(artifact)])
@@ -115,10 +116,21 @@ def msi_payload(artifact,private,*,include_embedded=False):
     for item in tree.iter():
         kind=tag(item)
         if kind not in ('File','Binary'):continue
-        source=Path(item.get('Source' if kind=='File' else 'SourceFile',''))
-        if not source.is_absolute():source=document.parent/source
-        source=source.resolve(strict=True)
-        if not source.is_relative_to(extraction.resolve()) or source.is_symlink() or not source.is_file():
+        identifier=sbom.relative(item.get('Id',''))
+        if '/' in identifier:raise ValueError('MSI stream identity is not a single filename')
+        if kind=='File':
+            # WiX 4.0.6 uses the logical BaseSourcePath "SourceDir" in WXS,
+            # while -x physically extracts compressed File rows under File/.
+            # Bind its exact mapping; never search for a similarly named file.
+            if item.get('Source','').replace('\\','/')!='SourceDir/File/'+identifier:
+                raise ValueError('MSI compressed file source differs from the exact WiX extraction layout')
+            source=extraction/'File'/identifier
+        else:
+            source=Path(item.get('SourceFile',''))
+            if not source.is_absolute() or source!=extraction/'Binary'/identifier:
+                raise ValueError('MSI Binary stream differs from the exact WiX extraction layout')
+        sbom.physical_directory(source.parent)
+        if source.is_symlink() or not source.is_file() or not source.is_relative_to(extraction):
             raise ValueError('MSI extractor file leaves its controlled extraction directory')
         if kind=='Binary':
             name='installer-binaries/'+sbom.relative(item.get('Id',''))
@@ -153,7 +165,7 @@ def materialize(stage,artifact,inner_bom,format):
     artifact_digest=sbom.digest(artifact);bom_digest=sbom.digest(inner_bom)
     document=sbom.load(inner_bom);expected,bom_path=inner_inventory(document)
     with tempfile.TemporaryDirectory(prefix='xssi-native-package-') as temporary:
-        private=Path(temporary);payload=private/'payload';embedded={}
+        private=Path(temporary).resolve(strict=True);payload=private/'payload';embedded={}
         if format=='deb':
             component=document['metadata']['component']
             expected_version=component['version'].replace('-rc.','~rc')

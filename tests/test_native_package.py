@@ -6,10 +6,58 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
+import xml.etree.ElementTree as ET
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 import native_package
 import release_sbom
+
+
+class MsiExtractionLayoutTests(unittest.TestCase):
+    """Exercise the retained WiX 4.0.6 output contract, not Windows installation."""
+    def test_compressed_file_and_binary_use_their_exact_extracted_streams(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary).resolve(strict=True)
+            def decompile(command):
+                extraction=Path(command[command.index('-x')+1]);(extraction/'File').mkdir(parents=True,exist_ok=True)
+                (extraction/'Binary').mkdir()
+                (extraction/'File'/'ClientExecutable').write_bytes(b'actual compressed stream')
+                (extraction/'Binary'/'Wix4UtilCA_X64').write_bytes(b'actual embedded stream')
+                document=ET.Element('Wix');package=ET.SubElement(document,'Package')
+                directory=ET.SubElement(package,'Directory',Id='INSTALLFOLDER',Name='Client')
+                component=ET.SubElement(directory,'Component',Id='ServiceComponent')
+                ET.SubElement(component,'File',Id='ClientExecutable',Name='client.exe',Source=r'SourceDir\File\ClientExecutable')
+                ET.SubElement(package,'Binary',Id='Wix4UtilCA_X64',SourceFile=str(extraction/'Binary'/'Wix4UtilCA_X64'))
+                ET.ElementTree(document).write(command[command.index('-o')+1])
+            with patch.object(native_package,'tool',return_value='fixture-wix'),patch.object(native_package,'run',side_effect=decompile):
+                payload,embedded=native_package.msi_payload(root/'input.msi',root/'work',include_embedded=True)
+            self.assertEqual((payload/'client.exe').read_bytes(),b'actual compressed stream')
+            self.assertEqual((payload/'installer-binaries/Wix4UtilCA_X64').read_bytes(),b'actual embedded stream')
+            self.assertEqual(embedded['installer-binaries/Wix4UtilCA_X64']['sha256'],hashlib.sha256(b'actual embedded stream').hexdigest())
+
+    def test_unknown_source_aliases_and_symlinked_streams_are_rejected(self):
+        changes=['logical-source','physical-symlink','binary-source']
+        for change in changes:
+            with self.subTest(change=change),tempfile.TemporaryDirectory() as temporary:
+                root=Path(temporary).resolve(strict=True)
+                def decompile(command):
+                    extraction=Path(command[command.index('-x')+1]);(extraction/'File').mkdir(parents=True,exist_ok=True)
+                    (extraction/'Binary').mkdir()
+                    stream=extraction/'File'/'ClientExecutable';stream.write_bytes(b'original')
+                    if change=='physical-symlink':
+                        outside=root/'outside';outside.write_bytes(b'original');stream.unlink()
+                        try:stream.symlink_to(outside)
+                        except OSError as error:self.skipTest('host cannot create file symlinks: '+str(error))
+                    binary=extraction/'Binary'/'Util';binary.write_bytes(b'binary')
+                    document=ET.Element('Wix');package=ET.SubElement(document,'Package')
+                    directory=ET.SubElement(package,'Directory',Id='INSTALLFOLDER',Name='Client')
+                    component=ET.SubElement(directory,'Component',Id='ServiceComponent')
+                    ET.SubElement(component,'File',Id='ClientExecutable',Name='client.exe',Source='File/ClientExecutable' if change=='logical-source' else 'SourceDir/File/ClientExecutable')
+                    ET.SubElement(package,'Binary',Id='Util',SourceFile=str(root/'outside-binary' if change=='binary-source' else binary))
+                    ET.ElementTree(document).write(command[command.index('-o')+1])
+                with patch.object(native_package,'tool',return_value='fixture-wix'),patch.object(native_package,'run',side_effect=decompile),self.assertRaises(ValueError):
+                    native_package.msi_payload(root/'input.msi',root/'work')
 
 
 @unittest.skipUnless(shutil.which('dpkg-deb'),'actual DEB extraction requires dpkg-deb')

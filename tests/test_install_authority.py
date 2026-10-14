@@ -199,12 +199,12 @@ class InstallAuthorityTests(unittest.TestCase):
         self.assertEqual(target.stat().st_ino,before)
         self.assertEqual(json.loads(target.read_text()),{})
 
-    def test_missing_owned_stage_can_be_recreated_but_old_journal_is_rejected(self):
+    def test_missing_owned_stage_can_be_recreated_but_unknown_journal_is_rejected(self):
         stage=self.failed_stage()
         journal_path=self.root/'maintenance/install.json'
         journal=json.loads(journal_path.read_text())
         install.cleanup_recorded_directory(stage,journal,'stage_seal')
-        journal['version']=1;journal_path.write_text(json.dumps(journal))
+        journal['version']=2;journal_path.write_text(json.dumps(journal))
         self.assertNotEqual(self.invoke().returncode,0)
         self.assertFalse(stage.exists())
         journal['version']=install.INSTALL_JOURNAL_VERSION;journal_path.write_text(json.dumps(journal))

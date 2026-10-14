@@ -124,7 +124,7 @@ def run_one(base, setup, companion, product):
                     info = path.stat()
                     imports[name] = dict(written=True, device=info.st_dev, inode=info.st_ino, sha256=sha(path))
             operation = str(uuid.uuid4())
-            journal = dict(version=4, operation_id=operation, product=product, root=str(root),
+            journal = dict(version=1, operation_id=operation, product=product, root=str(root),
                            phase='initialize-intent', package_sha256=sha(manifest_path), configuration_files=imports)
             install_record = root / 'maintenance/install.json'
             install_record.write_text(json.dumps(journal))

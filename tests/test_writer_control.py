@@ -54,6 +54,7 @@ class WriterControlTests(unittest.TestCase):
         return control.control_writers(list(self.states),self.record,unit_directory=self.units)
     def test_all_writers_guarded_before_any_stop_and_original_enablement_restored(self):
         result=self.start_control();self.assertEqual(result['phase'],'stopped')
+        self.assertEqual(result['version'],1)
         first_stop=next(i for i,args in enumerate(self.calls) if args[1]=='stop')
         self.assertTrue(any(args[1]=='daemon-reload' for args in self.calls[:first_stop]))
         for writer in result['writers']:
@@ -62,6 +63,17 @@ class WriterControlTests(unittest.TestCase):
         self.assertTrue(all(not Path(writer['control_path']).exists() for writer in restored['writers']))
         self.assertTrue(all(state['UnitFileState']=='enabled' for state in self.states.values()))
         self.assertTrue(all(args[0]=='/usr/bin/busctl' or args[1] in ('show','stop','daemon-reload') for args in self.calls))
+    def test_only_current_record_format_is_read_without_manager_mutation(self):
+        value=self.start_control()
+        for version in (2,0,True):
+            changed=dict(value,version=version)
+            self.atomic(self.record,json.dumps(changed).encode());before=len(self.calls)
+            with self.subTest(version=version),self.assertRaises(ValueError):
+                control.resume_control(self.record,list(self.states))
+            self.assertEqual(len(self.calls),before)
+            self.assertTrue(all(Path(writer['control_path']).is_file() for writer in value['writers']))
+        self.atomic(self.record,json.dumps(value).encode())
+        self.assertEqual(control.resume_control(self.record,list(self.states))['version'],1)
     def test_partial_stop_keeps_inhibition_and_exact_observed_progress(self):
         self.fail_stop='xcos-mediamtx.service'
         with self.assertRaises(ValueError):self.start_control()

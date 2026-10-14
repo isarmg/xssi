@@ -221,7 +221,7 @@ impl Session {
             4 * 1024 * 1024,
         )?)?;
         ensure!(
-            install["version"] == 4
+            install["version"] == 1
                 && install["operation_id"] == operation
                 && install["product"] == context.contract.identity.product
                 && install["root"] == context.root.to_string_lossy().as_ref(),

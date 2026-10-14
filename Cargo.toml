@@ -20,7 +20,7 @@ sha2 = "0.11"
 hkdf = "0.13"
 hmac = "0.13"
 tokio = { version = "1.53.2", features = ["macros", "rt-multi-thread"] }
-xcsc = { git = "https://github.com/isarmg/xcsc.git", rev = "c0cf985f82663199e270112a72bbf54ce48ff415", version = "=1.0.5", features = ["offline-maintenance"] }
+xcsc = { git = "https://github.com/isarmg/xcsc.git", rev = "6fca4299f5c34a79db1c7bd4e889b418d2a58e2d", version = "=1.0.0", features = ["offline-maintenance"] }
 argon2 = { version = "0.5", features = ["std"] }
 base64 = "0.23.1"
 jsonschema = { version = "0", default-features = false }

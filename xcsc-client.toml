@@ -1,0 +1,12 @@
+format = 1
+product_id = "xssi"
+source_roots = ["src", "tests"]
+
+[foundation]
+platform_generation = 1
+version = "1.0.0"
+
+[[components]]
+id = "setup"
+profile = "offline-maintenance"
+capabilities = ["private-state", "explicit-paths", "restore-journal", "linux-openat2", "offline-sqlite-maintenance"]
