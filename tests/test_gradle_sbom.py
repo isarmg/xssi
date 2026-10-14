@@ -26,7 +26,7 @@ class GradleRuntimeTests(unittest.TestCase):
     def setUp(self):
         self.temporary=tempfile.TemporaryDirectory(prefix='xssi-gradle-runtime-')
         self.addCleanup(self.temporary.cleanup)
-        self.root=Path(self.temporary.name);self.stage=self.root/'release';self.stage.mkdir()
+        self.root=Path(self.temporary.name).resolve(strict=True);self.stage=self.root/'release';self.stage.mkdir()
         self.repository='https://repo.example.invalid/maven/'
         self.group='org.example';self.name='runtime';self.version='1.2.3';self.identity='org.example:runtime:1.2.3'
         self.artifact=archive({'classes.jar':archive({'META-INF/NOTICE.txt':b'Actual nested upstream copyright notice.\n','org/example/Class.class':b'class fixture'}),
@@ -55,8 +55,10 @@ class GradleRuntimeTests(unittest.TestCase):
 
     def test_binary_control_bytes_are_preserved_by_the_stable_reader(self):
         value=b'PK\x03\x04\r\n\x1a\x00 actual binary cache bytes\r\n'
-        path=self.root/'binary-input.dll';path.write_bytes(value)
-        self.assertEqual(gradle_sbom.bytes_regular(path,len(value)),value)
+        for extension in ('.dll','.exe','.nupkg'):
+            with self.subTest(extension=extension):
+                path=self.root/('binary-input'+extension);path.write_bytes(value)
+                self.assertEqual(gradle_sbom.bytes_regular(path,len(value)),value)
 
     def test_actual_artifact_hash_graph_parent_and_nested_upstream_notices(self):
         output=self.invoke();bom=json.loads(output.read_text())
@@ -80,12 +82,20 @@ class GradleRuntimeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'exact resolved runtime artifact'):self.invoke()
         self.assertFalse((self.stage/'share/android-runtime-sbom.cdx.json').exists())
 
+    def test_actual_unicode_license_identity_survives_machine_json_serialization(self):
+        pom_url=next(url for url in self.remote if url.endswith('.pom'))
+        license_name='Original license \u03bb\u8bb8\u53ef\u8bc1'
+        self.remote[pom_url]=self.remote[pom_url].replace(b'Fixture License',license_name.encode('utf-8'))
+        output=self.invoke()
+        bom=json.loads(output.read_bytes())
+        self.assertIn(license_name,[entry['license']['name'] for entry in bom['components'][0]['licenses']])
+
     def test_cached_file_change_and_alias_are_rejected_before_source_fetch(self):
         self.path.write_bytes(b'changed bytes')
         with self.assertRaisesRegex(ValueError,'changed before inventory'):self.invoke()
         self.path.rename(self.path.with_suffix('.held'));self.path.symlink_to(self.path.with_suffix('.held'))
         self.stage=self.root/'alias-release';self.stage.mkdir()
-        with self.assertRaisesRegex(ValueError,'physical file'):self.invoke()
+        with self.assertRaisesRegex(ValueError,'cannot follow a link'):self.invoke()
 
     def test_build_debug_disconnected_and_unknown_edges_cannot_enter_runtime_graph(self):
         changed=copy.deepcopy(self.export);changed['configuration']='debugRuntimeClasspath'

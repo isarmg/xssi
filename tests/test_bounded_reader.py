@@ -2,6 +2,7 @@
 from pathlib import Path
 import json
 import os
+import stat
 import sys
 import tempfile
 import time
@@ -25,7 +26,7 @@ class BoundedReaderTests(unittest.TestCase):
         observations=[]
         original_fstat=os.fstat
         original_lstat=Path.lstat
-        fields=('st_dev','st_ino','st_nlink','st_size','st_mtime_ns',
+        fields=('st_dev','st_ino','st_mode','st_nlink','st_size','st_mtime_ns',
                 'st_ctime_ns','st_birthtime_ns','st_file_attributes','st_reparse_tag')
         def record(kind,info):
             observations.append({'kind':kind,'metadata':{name:getattr(info,name,None) for name in fields}})
@@ -74,6 +75,48 @@ class BoundedReaderTests(unittest.TestCase):
         os.utime(file,ns=(original.st_atime_ns,original.st_mtime_ns))
         self.assertEqual(self.observe(file,lambda:bounded(file,len(contents)),report_windows_semantics=True),contents)
         self.assertEqual(self.observe(file,lambda:release_sbom.digest(file)),hashlib.sha256(contents).hexdigest())
+
+    @unittest.skipUnless(os.name=='nt','Windows derives executable mode bits from the pathname')
+    def test_actual_windows_executable_extensions_and_readonly_attributes(self):
+        import hashlib
+        contents=b'MZ public\r\nbinary\x1a\x00\xfffixture'
+        for extension in ('.exe','.EXE','.cmd','.bat','.com'):
+            file=self.root/('executable'+extension)
+            file.write_bytes(contents)
+            try:
+                for readonly in (False,True):
+                    with self.subTest(extension=extension,readonly=readonly):
+                        os.chmod(file,stat.S_IREAD if readonly else stat.S_IREAD|stat.S_IWRITE)
+                        named=file.lstat()
+                        descriptor=os.open(file,os.O_RDONLY|os.O_BINARY)
+                        try:opened=os.fstat(descriptor)
+                        finally:os.close(descriptor)
+                        self.assertEqual(named.st_mode&0o111,0o111)
+                        self.assertEqual(opened.st_mode&0o111,0)
+                        self.assertEqual(bool(named.st_file_attributes&1),readonly)
+                        self.assertEqual(bool(opened.st_file_attributes&1),readonly)
+                        self.assertEqual(self.observe(file,lambda:bounded(file,len(contents)),
+                                                       report_windows_semantics=True),contents)
+                        self.assertEqual(gradle_sbom.bytes_regular(file,len(contents)),contents)
+                        self.assertEqual(release_sbom.digest(file),hashlib.sha256(contents).hexdigest())
+            finally:os.chmod(file,stat.S_IREAD|stat.S_IWRITE)
+
+    @unittest.skipUnless(os.name=='nt','Windows read-only attributes are actual file metadata')
+    def test_windows_executable_attribute_change_during_read_is_rejected(self):
+        file=self.root/'changing.exe';file.write_bytes(b'MZ public binary fixture')
+        original_read=os.read;changed=False
+        def change_after_read(descriptor,count):
+            nonlocal changed
+            data=original_read(descriptor,count)
+            if data and not changed:
+                changed=True
+                os.chmod(file,stat.S_IREAD)
+            return data
+        try:
+            with patch.object(release_sbom.os,'read',side_effect=change_after_read):
+                with self.assertRaisesRegex(ValueError,'changed'):bounded(file,1024)
+            self.assertTrue(changed)
+        finally:os.chmod(file,stat.S_IREAD|stat.S_IWRITE)
 
     def test_same_size_rewrite_with_restored_mtime_during_read_is_rejected(self):
         contents=b'public file fixture'

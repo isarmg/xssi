@@ -70,7 +70,12 @@ def named_identity(info):
     # metadata change time. Compare birthtime across these APIs; full fstat
     # identity still checks change time before and after reading.
     timestamp = info.st_birthtime_ns if os.name == 'nt' else info.st_ctime_ns
-    return (info.st_dev, info.st_ino, info.st_mode, info.st_nlink, info.st_uid,
+    # Windows path stat also synthesizes execute bits from .exe/.cmd/.bat/.com
+    # suffixes; fstat has no pathname and cannot produce those bits. They are
+    # not NTFS permissions. Keep file type, read/write bits and attributes,
+    # and retain each API's full before/after identity above.
+    mode = info.st_mode & ~0o111 if os.name == 'nt' else info.st_mode
+    return (info.st_dev, info.st_ino, mode, info.st_nlink, info.st_uid,
             info.st_gid, info.st_size, info.st_mtime_ns, timestamp,
             getattr(info, 'st_file_attributes', 0), getattr(info, 'st_reparse_tag', 0))
 

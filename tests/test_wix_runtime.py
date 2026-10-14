@@ -16,7 +16,7 @@ import wix_runtime
 class WixRuntimeTests(unittest.TestCase):
     def setUp(self):
         self.temporary=tempfile.TemporaryDirectory(prefix='xssi-wix-source-')
-        self.addCleanup(self.temporary.cleanup);self.root=Path(self.temporary.name)
+        self.addCleanup(self.temporary.cleanup);self.root=Path(self.temporary.name).resolve(strict=True)
         self.cache=self.root/'cache';self.inputs=self.root/'inputs';self.inputs.mkdir()
         self.payload=self.root/'payload';self.payload.mkdir()
         self.packages={}

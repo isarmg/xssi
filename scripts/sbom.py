@@ -9,9 +9,11 @@ import stat
 import subprocess
 import threading
 import time
+import tomllib
 import package
 from release_manifest import bounded
-from sbom_normalization import normalize
+from sbom_normalization import normalize, selected_metadata
+from cargo_selection import tree_command, selection_from_tree
 
 TARGET='x86_64-unknown-linux-gnu'
 ROOT=Path(__file__).resolve().parents[1]
@@ -159,6 +161,13 @@ def inventory(source,manifest,root_name,features,environment,stage,label,local_s
     if all_features:options.append('--all-features')
     elif features:options.extend(['--features',features if isinstance(features,str) else ','.join(features)])
     metadata=package.loads(run(['cargo','metadata','--frozen','--format-version','1','--manifest-path',str(manifest),'--filter-platform',target,*options],source,environment))
+    tree=run(tree_command(manifest,root_name,target,features or (),default_features=default_features,
+                          all_features=all_features),source,environment).decode('utf-8')
+    selection=selection_from_tree(metadata,tree,root_name)
+    (source/'xssi-cargo-full-metadata.json').write_text(json.dumps(metadata),encoding='utf-8')
+    (source/'xssi-cargo-selection.json').write_text(json.dumps(selection),encoding='utf-8')
+    (source/'xssi-cargo-tree.txt').write_text(tree,encoding='utf-8')
+    metadata=selected_metadata(metadata,selection)
     run(['cargo','cyclonedx','--manifest-path',str(manifest),'--format','json','--spec-version','1.5','--override-filename','xssi-release.cdx','--all','--target',target,*options,'--quiet'],source,environment)
     if bounded(source/'Cargo.lock',8*1024*1024)!=lock:raise ValueError('SBOM tool changed the locked dependency graph')
     raw=package.loads(bounded(manifest.parent/'xssi-release.cdx.json',8*1024*1024))
@@ -171,10 +180,21 @@ def inventory(source,manifest,root_name,features,environment,stage,label,local_s
             revisions[item['id']]=matches[0]
     bom=normalize(raw,metadata,root_name,revisions,[str(prefix) for prefix,_ in local_sources])
     destination=stage/'share'/f'{label}-sbom.cdx.json'
-    destination.write_text(json.dumps(bom,sort_keys=True,ensure_ascii=False,indent=2)+'\n')
-    metadata_path=source/'xssi-cargo-metadata.json';metadata_path.write_text(json.dumps(metadata))
+    destination.write_text(json.dumps(bom,sort_keys=True,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+    metadata_path=source/'xssi-cargo-metadata.json';metadata_path.write_text(json.dumps(metadata),encoding='utf-8')
+    lock_packages=tomllib.loads(lock.decode('utf-8'))['package'];checksums=[]
+    for item in metadata['packages']:
+        if item['source'] is None:continue
+        matches=[record for record in lock_packages if (record['name'],record['version'],record.get('source'))
+                 ==(item['name'],item['version'],item['source'])]
+        if len(matches)!=1:raise ValueError('selected dependency has no unique immutable Cargo lock source')
+        checksums.append({key:item[key] for key in ('id','name','version','source')}|
+                         {'checksum':matches[0].get('checksum')})
+    (source/'xssi-cargo-source-checksums.json').write_text(json.dumps({'format_version':1,'packages':checksums}),encoding='utf-8')
+    from upstream_licenses import prepare
+    prepare(source,metadata,set(selection['ids']),environment)
     notices=stage/'share'/f'THIRD_PARTY_{label.upper()}_LICENSES.txt'
-    run(['node',str(ROOT/'scripts/generate-third-party-notices.mjs'),str(metadata_path),str(source/'xssi-vendor'),str(source),str(notices),root_name],source,environment)
+    run(['node',str(ROOT/'scripts/generate-third-party-notices.mjs'),str(metadata_path),str(source/'xssi-vendor'),str(source),str(notices),root_name,str(destination)],source,environment)
     if not bounded(notices,16*1024*1024).strip():raise ValueError('release dependency notices are empty')
     destination.chmod(0o644);notices.chmod(0o644)
     return destination

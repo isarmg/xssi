@@ -4,7 +4,7 @@ import sys
 import unittest
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-from sbom_normalization import normalize
+from sbom_normalization import normalize, selected_metadata
 
 
 class SbomTests(unittest.TestCase):
@@ -94,6 +94,29 @@ class SbomTests(unittest.TestCase):
         result=self.run_bom(bom,metadata)
         refs={item['bom-ref'] for item in result['components']}
         self.assertNotIn(macro,refs);self.assertNotIn(self.dev,refs)
+
+    def test_independent_selected_tree_excludes_workspace_feature_union(self):
+        metadata=copy.deepcopy(self.metadata);bom=copy.deepcopy(self.bom)
+        android='path+file:///tmp/build/android#android-only@1.0.0'
+        metadata['packages'].append({'id':android,'name':'android-only','version':'1.0.0','source':None})
+        metadata['resolve']['nodes'].append({'id':android,'deps':[]})
+        metadata['resolve']['nodes'][1]['deps'].append({'pkg':android,'dep_kinds':[{'kind':None}]})
+        bom['components'].append({'bom-ref':android,'name':'android-only','version':'1.0.0','purl':'pkg:cargo/android-only@1.0.0?download_url=file://.'})
+        bom['dependencies'][1]['dependsOn'].append(android)
+        bom['dependencies'].append({'ref':android,'dependsOn':[]})
+        selection={'root':self.root,'ids':[self.root,self.product,self.library],
+                   'edges':{self.root:[self.product],self.product:[self.library],self.library:[]}}
+        chosen=selected_metadata(metadata,selection)
+        result=self.run_bom(bom,chosen)
+        self.assertNotIn(android,[item['bom-ref'] for item in result['components']])
+        self.assertNotIn('android-only',str(result))
+        self.assertIn(android,[item['id'] for item in metadata['packages']])
+        for mode in ('foreign-edge','duplicate','disconnected'):
+            forged=copy.deepcopy(selection)
+            if mode=='foreign-edge':forged['edges'][self.root].append(self.library)
+            elif mode=='duplicate':forged['ids'].append(self.root)
+            else:forged['edges'][self.root]=[]
+            with self.subTest(mode=mode),self.assertRaises(ValueError):selected_metadata(metadata,forged)
 
 
 if __name__=='__main__':unittest.main()

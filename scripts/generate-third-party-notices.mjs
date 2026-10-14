@@ -33,6 +33,8 @@ const ALLOWED_SPDX_LICENSES = new Set([
   "BSD-2-Clause",
   "BSD-3-Clause",
   "BSL-1.0",
+  "CC0-1.0",
+  "CDLA-Permissive-2.0",
   "ISC",
   "LGPL-2.1-or-later",
   "MIT",
@@ -48,19 +50,9 @@ const ALLOWED_SPDX_EXCEPTIONS = new Set([
 const CURATED_LEGACY_LICENSE_EXPRESSIONS = new Map([
   ["MIT/Apache-2.0", "MIT OR Apache-2.0"],
   ["Unlicense/MIT", "Unlicense OR MIT"],
+  ["Apache-2.0/MIT", "Apache-2.0 OR MIT"],
+  ["Apache-2.0 / MIT", "Apache-2.0 OR MIT"],
 ]);
-// This immutable crates.io release predates canonical SPDX metadata. Keep its
-// declaration verbatim and require the reviewed archive and both original
-// license files before interpreting this one declaration as a choice.
-const FNV_1_0_7 = {
-  declared: "Apache-2.0 / MIT",
-  expression: "Apache-2.0 OR MIT",
-  checksum: "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1",
-  licenses: new Map([
-    ["LICENSE-APACHE", "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"],
-    ["LICENSE-MIT", "65fdb6c76cd61612070c066eec9ecdb30ee74fb27859d0d9af58b9f499fd0c3e"],
-  ]),
-};
 const PERMISSIVE_SPDX_LICENSES = new Set(
   [...ALLOWED_SPDX_LICENSES].filter(identifier =>
     identifier !== "LGPL-2.1-or-later"
@@ -73,26 +65,27 @@ if (arguments_.length === 1 && arguments_[0] === "--self-test") {
   runSelfTest();
   process.exit(0);
 }
-if (arguments_.length !== 5) {
+if (arguments_.length !== 6) {
   throw new Error(
     "Usage: generate-third-party-notices.mjs " +
-      "<cargo-metadata.json> <vendor-root> <license-root> <output> <root-package>",
+      "<cargo-metadata.json> <vendor-root> <license-root> <output> <root-package> <actual-runtime-sbom.json>",
   );
 }
 
-const [metadataPath, vendorRoot, licenseRoot, outputPath, rootName] = arguments_;
+const [metadataPath, vendorRoot, licenseRoot, outputPath, rootName, bomPath] = arguments_;
 const metadata = JSON.parse(readFileSync(metadataPath, "utf8"));
-const output = generateNotices(metadata, vendorRoot, licenseRoot, rootName);
+const output = generateNotices(metadata, vendorRoot, licenseRoot, rootName,
+  JSON.parse(readFileSync(bomPath, "utf8")));
 writeAtomically(outputPath, output);
 
-function generateNotices(metadataDocument, vendorPath, licensePath, rootName = "xczs") {
+function generateNotices(metadataDocument, vendorPath, licensePath, rootName, bom) {
   assertMetadata(metadataDocument);
   const physicalVendorRoot = realpathSync(resolve(vendorPath));
-  // Keep validating the caller-supplied project root for a stable CLI, but do
-  // not use its generic license files as substitutes for an upstream notice.
+  // The project root carries controlled source receipts. Its generic license
+  // files cannot substitute for an upstream notice.
   // MIT-family licenses carry package-specific copyright notices, so a
   // project-wide fallback would silently misattribute another package.
-  realpathSync(resolve(licensePath));
+  const physicalLicenseRoot = realpathSync(resolve(licensePath));
   const packagesById = new Map(
     metadataDocument.packages.map(package_ => [package_.id, package_]),
   );
@@ -122,32 +115,40 @@ function generateNotices(metadataDocument, vendorPath, licensePath, rootName = "
   if (packages.length === 0) {
     throw new Error("Cargo metadata contains no third-party release dependency");
   }
+  const actual = actualComponents(bom, packages, rootName, workspaceRoots[0].version);
+  const provenance = JSON.parse(readFileSync(physicalRegular(physicalLicenseRoot,
+    join(physicalLicenseRoot, "xssi-cargo-source-checksums.json")), "utf8"));
+  if (provenance.format_version !== 1 || !Array.isArray(provenance.packages) || provenance.packages.length > 4096) {
+    throw new Error("unsupported locked Cargo source checksum receipt");
+  }
+  const sourceById = new Map(provenance.packages.map(item => [item.id,item]));
+  if (sourceById.size !== provenance.packages.length) throw new Error("duplicate locked Cargo source identity");
 
   const textsByDigest = new Map();
   const packageRecords = packages.map(package_ => {
-    const expression = validateLicenseExpression(package_);
+    const expression = validateLicenseExpression(package_, actual.get(package_.id));
     const sourceDirectory = realpathSync(dirname(package_.manifest_path));
     assertContained(physicalVendorRoot, sourceDirectory, package_.name);
+    const checksum = JSON.parse(readFileSync(physicalRegular(sourceDirectory,
+      join(sourceDirectory, ".cargo-checksum.json")), "utf8"));
+    const sourceRecord = sourceById.get(package_.id);
+    if (!sourceRecord || sourceRecord.name !== package_.name ||
+        sourceRecord.version !== package_.version || sourceRecord.source !== package_.source ||
+        checksum.package !== sourceRecord.checksum ||
+        (package_.source.startsWith("registry+") && !/^[0-9a-f]{64}$/u.test(sourceRecord.checksum))) {
+      throw new Error("upstream vendor source differs from the selected immutable Cargo lock");
+    }
     const licenseFiles = findLicenseFiles(
       package_,
       sourceDirectory,
       physicalVendorRoot,
+      physicalLicenseRoot,
     );
-    if (isReviewedFnv(package_)) {
-      const checksumPath = join(sourceDirectory, ".cargo-checksum.json");
-      const checksumMetadata = lstatSync(checksumPath);
-      if (!checksumMetadata.isFile() || checksumMetadata.isSymbolicLink() ||
-          JSON.parse(readFileSync(checksumPath, "utf8")).package !== FNV_1_0_7.checksum) {
-        throw new Error("fnv 1.0.7 differs from its reviewed immutable archive");
-      }
-      for (const [name, digest] of FNV_1_0_7.licenses) {
-        const path = licenseFiles.find(candidate => basename(candidate) === name);
-        if (!path || createHash("sha256").update(readFileSync(path)).digest("hex") !== digest) {
-          throw new Error("fnv 1.0.7 is missing a reviewed original license text");
-        }
-      }
-    }
-    const digests = licenseFiles.map(path => {
+    const sources = [];
+    const includedChoices = new Set(licenseFiles.map(item => item.selected).filter(Boolean));
+    if (includedChoices.size > 1) throw new Error("conflicting original license choices");
+    const digests = licenseFiles.map(({path, source}) => {
+      if (source) sources.push(source);
       const bytes = readFileSync(path);
       if (bytes.includes(0)) {
         throw new Error(
@@ -185,6 +186,8 @@ function generateNotices(metadataDocument, vendorPath, licensePath, rootName = "
       digests: [...new Set(digests)].sort(),
       license: package_.license || "SEE LICENSE FILE",
       expression,
+      sources: [...new Set(sources)].sort(),
+      selected: [...includedChoices][0],
       name: package_.name,
       version: package_.version,
     };
@@ -205,7 +208,9 @@ function generateNotices(metadataDocument, vendorPath, licensePath, rootName = "
       `${record.name} ${record.version}`,
       `  Declared license: ${record.license}`,
       ...(record.expression !== record.license ?
-        [`  Reviewed SPDX expression: ${record.expression}`] : []),
+        [`  Resolved SPDX expression: ${record.expression}`] : []),
+      ...record.sources.map(source => `  Original license source: ${source}`),
+      ...(record.selected ? [`  Included license choice: ${record.selected}`] : []),
       ...record.digests.map(digest => `  License text SHA-256: ${digest}`),
       "",
     );
@@ -264,7 +269,36 @@ function comparePackages(left, right) {
     left.id.localeCompare(right.id);
 }
 
-function validateLicenseExpression(package_) {
+function actualComponents(bom, packages, rootName, rootVersion) {
+  if (bom?.bomFormat !== "CycloneDX" || bom.specVersion !== "1.5" || bom.version !== 1 ||
+      bom.metadata?.component?.name !== rootName || bom.metadata.component.version !== rootVersion || !Array.isArray(bom.components)) {
+    throw new Error("notice input is not the selected actual runtime SBOM");
+  }
+  const components = new Map();
+  const visit = items => {
+    for (const item of items) {
+      if (!item || typeof item["bom-ref"] !== "string" || components.has(item["bom-ref"])) {
+        throw new Error("duplicate or missing actual component identity");
+      }
+      components.set(item["bom-ref"], item);
+      visit(item.components || []);
+    }
+  };
+  visit([bom.metadata.component, ...bom.components]);
+  const result = new Map();
+  for (const package_ of packages) {
+    const item = components.get(package_.id);
+    if (!item || item.name !== package_.name || item.version !== package_.version ||
+        !Array.isArray(item.licenses) || item.licenses.length !== 1 ||
+        typeof item.licenses[0]?.expression !== "string") {
+      throw new Error("notice license is not bound to its actual selected Cargo component");
+    }
+    result.set(package_.id, item.licenses[0].expression);
+  }
+  return result;
+}
+
+function validateLicenseExpression(package_, actualExpression) {
   const expression = package_.license;
   if (!expression) {
     throw new Error(
@@ -273,11 +307,15 @@ function validateLicenseExpression(package_) {
     );
   }
   let parsed;
-  const normalized = isReviewedFnv(package_) ? FNV_1_0_7.expression :
-    CURATED_LEGACY_LICENSE_EXPRESSIONS.get(expression) || expression;
+  const normalized = CURATED_LEGACY_LICENSE_EXPRESSIONS.get(expression) || expression;
   try {
     parsed = parseSpdxExpression(normalized);
     validateSpdxIdentifiers(parsed);
+    const actual = parseSpdxExpression(actualExpression);
+    validateSpdxIdentifiers(actual);
+    if (JSON.stringify(parsed) !== JSON.stringify(actual)) {
+      throw new Error("mature SPDX expression differs from the original declaration");
+    }
   } catch (error) {
     throw new Error(
       `dependency has an invalid or unapproved SPDX expression: ` +
@@ -291,13 +329,7 @@ function validateLicenseExpression(package_) {
         `${package_.name} ${package_.version}`,
     );
   }
-  return normalized;
-}
-
-function isReviewedFnv(package_) {
-  return package_.name === "fnv" && package_.version === "1.0.7" &&
-    package_.source === "registry+https://github.com/rust-lang/crates.io-index" &&
-    package_.license === FNV_1_0_7.declared;
+  return actualExpression;
 }
 
 function parseSpdxExpression(expression) {
@@ -437,6 +469,7 @@ function findLicenseFiles(
   package_,
   sourceDirectory,
   physicalVendorRoot,
+  physicalLicenseRoot,
 ) {
   const candidates = [];
   if (package_.license_file) {
@@ -447,7 +480,28 @@ function findLicenseFiles(
       .filter(entry => LICENSE_FILE_PATTERN.test(entry.name))
       .map(entry => join(sourceDirectory, entry.name)),
   );
+  const licenseDirectory = join(sourceDirectory, "LICENSES");
+  if (existsPhysical(licenseDirectory)) {
+    const info = lstatSync(licenseDirectory);
+    if (!info.isDirectory() || info.isSymbolicLink() ||
+        realpathSync(licenseDirectory) !== licenseDirectory) {
+      throw new Error("upstream LICENSES is not a physical directory");
+    }
+    const entries = readdirSync(licenseDirectory, {withFileTypes: true});
+    if (entries.length === 0 || entries.length > 32) {
+      throw new Error("upstream LICENSES has an invalid entry count");
+    }
+    for (const entry of entries) {
+      if (!entry.isFile() || entry.isSymbolicLink() || !entry.name.endsWith(".txt") ||
+          !ALLOWED_SPDX_LICENSES.has(entry.name.slice(0, -4))) {
+        throw new Error("upstream LICENSES has an unreviewed structure or filename");
+      }
+      candidates.push(join(licenseDirectory, entry.name));
+    }
+  }
   if (candidates.length === 0) {
+    const upstream = recordedUpstreamLicenses(package_, sourceDirectory, physicalLicenseRoot);
+    if (upstream) return upstream;
     throw new Error(
       `dependency has no distributable license text: ` +
         `${package_.name} ${package_.version}`,
@@ -455,20 +509,102 @@ function findLicenseFiles(
   }
 
   return [...new Set(candidates)].map(candidate => {
-    const metadata = lstatSync(candidate);
-    if (!metadata.isFile() || metadata.isSymbolicLink()) {
-      throw new Error(
-        `dependency license is not a regular no-follow file: ${candidate}`,
-      );
-    }
-    const physical = realpathSync(candidate);
-    if (!isContained(sourceDirectory, physical)) {
-      throw new Error(
-        `dependency license escapes its own package: ${candidate}`,
-      );
-    }
+    const physical = physicalRegular(sourceDirectory, candidate);
     assertContained(physicalVendorRoot, physical, package_.name);
-    return physical;
+    const checksum = JSON.parse(readFileSync(physicalRegular(sourceDirectory,
+      join(sourceDirectory, ".cargo-checksum.json")), "utf8"));
+    const relativePath = relative(sourceDirectory, physical).split("\\").join("/");
+    if (checksum.files?.[relativePath] !== createHash("sha256").update(readFileSync(physical)).digest("hex")) {
+      throw new Error("original license differs from Cargo's immutable vendored source");
+    }
+    return {path: physical, source: null};
+  });
+}
+
+function existsPhysical(path) {
+  try {lstatSync(path); return true;}
+  catch (error) {if (error.code === "ENOENT") return false; throw error;}
+}
+
+function physicalRegular(root, path) {
+  path = resolve(path);
+  assertContained(root, path, "original license");
+  let current = root;
+  for (const segment of relative(root, path).split(/[\\/]/u)) {
+    current = join(current, segment);
+    const info = lstatSync(current);
+    if (info.isSymbolicLink() || (current !== path && !info.isDirectory())) {
+      throw new Error("original license path contains an alias or non-directory parent");
+    }
+  }
+  const info = lstatSync(path);
+  if (!info.isFile() || info.nlink !== 1 || info.size <= 0 || info.size > 1024 * 1024) {
+    throw new Error("original license is not a bounded single-link regular file");
+  }
+  return path;
+}
+
+function recordedUpstreamLicenses(package_, sourceDirectory, physicalLicenseRoot) {
+  const root = join(physicalLicenseRoot, "xssi-upstream-licenses");
+  if (!existsPhysical(root)) return null;
+  if (!lstatSync(root).isDirectory() || lstatSync(root).isSymbolicLink() || realpathSync(root) !== root) {
+    throw new Error("upstream license receipt root is not physical");
+  }
+  const receipt = JSON.parse(readFileSync(physicalRegular(root, join(root, "receipt.json")), "utf8"));
+  if (receipt.format_version !== 1 || !Array.isArray(receipt.packages) || receipt.packages.length > 4096) {
+    throw new Error("unsupported upstream license receipt");
+  }
+  const matches = receipt.packages.filter(item => item.name === package_.name &&
+    item.version === package_.version && item.source === package_.source);
+  if (matches.length === 0) return null;
+  if (matches.length !== 1) throw new Error("duplicate upstream license package identity");
+  const record = matches[0];
+  if (!/^[0-9a-f]{40}$/u.test(record.revision) ||
+      !/^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\.git)?$/u.test(record.repository)) {
+    throw new Error("upstream original license lacks immutable repository provenance");
+  }
+  const checksum = JSON.parse(readFileSync(physicalRegular(sourceDirectory,
+    join(sourceDirectory, ".cargo-checksum.json")), "utf8"));
+  if (package_.source.startsWith("registry+") &&
+      (!/^[0-9a-f]{64}$/u.test(record.package_checksum) || checksum.package !== record.package_checksum)) {
+    throw new Error("upstream license receipt differs from its immutable crate archive");
+  }
+  if (package_.source.startsWith("registry+")) {
+    const vcs = JSON.parse(readFileSync(physicalRegular(sourceDirectory,
+      join(sourceDirectory, ".cargo_vcs_info.json")), "utf8"));
+    if (vcs.git?.sha1 !== record.revision) {
+      throw new Error("original license source revision differs from its crate provenance");
+    }
+  } else if (package_.source.startsWith("git+")) {
+    const source = new URL(package_.source.slice(4));
+    if (source.username || source.password || source.hash !== "#" + record.revision ||
+        source.searchParams.get("rev") !== record.revision ||
+        (source.origin + source.pathname).replace(/\.git$/u, "") !== record.repository.replace(/\.git$/u, "")) {
+      throw new Error("original license source differs from its exact Cargo Git dependency");
+    }
+  } else throw new Error("unreviewed original license package source");
+  if (record.selected_license !== undefined) {
+    const selected = parseSpdxExpression(record.selected_license);
+    validateSpdxIdentifiers(selected);
+    const declaration = parseSpdxExpression(package_.license);
+    const contains = node => JSON.stringify(node) === JSON.stringify(selected) ||
+      (node.type === "or" && (contains(node.left) || contains(node.right)));
+    if (!hasPermissiveLicenseChoice(selected) || !contains(declaration)) {
+      throw new Error("included license choice is not offered by the publisher");
+    }
+  }
+  if (!Array.isArray(record.licenses) || record.licenses.length === 0 || record.licenses.length > 32) {
+    throw new Error("upstream license receipt has no complete original texts");
+  }
+  return record.licenses.map(item => {
+    if (typeof item.path !== "string" || item.path.includes("\\") || item.path.split("/").some(part => !part || part === "." || part === "..") ||
+        !/^[0-9a-f]{64}$/u.test(item.sha256) || typeof item.source !== "string" || !item.source.startsWith("https://") ||
+        /[\r\n\0]/u.test(item.source)) throw new Error("invalid original license source receipt");
+    const path = physicalRegular(root, resolve(root, item.path));
+    if (createHash("sha256").update(readFileSync(path)).digest("hex") !== item.sha256) {
+      throw new Error("original upstream license text differs from its source receipt");
+    }
+    return {path, source: item.source, selected: record.selected_license};
   });
 }
 
@@ -535,6 +671,8 @@ function runSelfTest() {
     mkdirSync(licenses);
     writeFileSync(join(packageDirectory, "Cargo.toml"), "[package]\n");
     writeFileSync(join(packageDirectory, "LICENSE"), "Dependency license\n");
+    writeFileSync(join(packageDirectory, ".cargo-checksum.json"), JSON.stringify({package:"a".repeat(64),
+      files:{LICENSE:createHash("sha256").update("Dependency license\n").digest("hex")}}));
     writeFileSync(join(devDirectory, "Cargo.toml"), "[package]\n");
     writeFileSync(join(devDirectory, "LICENSE"), "Dev-only license\n");
     writeFileSync(join(siblingDirectory, "LICENSE"), "Sibling license\n");
@@ -599,7 +737,18 @@ function runSelfTest() {
         ],
       },
     };
-    const notice = generateNotices(metadata, vendor, licenses);
+    const fixtureBom = meta => ({bomFormat:"CycloneDX", specVersion:"1.5",version:1,
+      metadata:{component:{name:"xczs", version:"1.0.0", "bom-ref":localId}},
+      components:meta.packages.filter(item => item.source !== null).map(item => ({
+        name:item.name,version:item.version,"bom-ref":item.id,
+        licenses:[{expression:CURATED_LEGACY_LICENSE_EXPRESSIONS.get(item.license) || item.license}]}))});
+    const noticesFor = (meta, bom=fixtureBom(meta)) => {
+      writeFileSync(join(licenses, "xssi-cargo-source-checksums.json"), JSON.stringify({
+        format_version:1,packages:meta.packages.filter(item => item.source !== null).map(item => ({
+          id:item.id,name:item.name,version:item.version,source:item.source,checksum:"a".repeat(64)}))}));
+      return generateNotices(meta,vendor,licenses,"xczs",bom);
+    };
+    const notice = noticesFor(metadata);
     if (
       !notice.includes("dependency 1.0.0") ||
       notice.includes("dev-only") ||
@@ -611,22 +760,29 @@ function runSelfTest() {
     const fnv = {name: "fnv", version: "1.0.7",
       source: "registry+https://github.com/rust-lang/crates.io-index",
       license: "Apache-2.0 / MIT"};
-    if (validateLicenseExpression(fnv) !== "Apache-2.0 OR MIT" ||
+    if (validateLicenseExpression(fnv, "Apache-2.0 OR MIT") !== "Apache-2.0 OR MIT" ||
         fnv.license !== "Apache-2.0 / MIT") {
       throw new Error("reviewed fnv metadata was not preserved and interpreted");
     }
-    for (const altered of [{name: "unreviewed"}, {version: "1.0.8"},
-      {source: "registry+https://example.invalid/index"},
-      {license: "Apache-2.0/MIT"}, {license: "Apache-2.0 / MIT / BSD-3-Clause"}]) {
+    for (const altered of [{license: "Apache-2.0 / MIT / BSD-3-Clause"},
+      {license:"LicenseRef-Proprietary / MIT"}, {license:"Apache-2.0 / GPL-3.0-only"}]) {
       let refused = false;
-      try {validateLicenseExpression({...fnv, ...altered});}
+      try {validateLicenseExpression({...fnv, ...altered}, "Apache-2.0 OR MIT");}
       catch {refused = true;}
       if (!refused) throw new Error("unreviewed slash license metadata was accepted");
     }
+    let mismatch = false;
+    try {validateLicenseExpression(fnv, "Apache-2.0 AND MIT");}
+    catch {mismatch = true;}
+    if (!mismatch) throw new Error("mature SPDX interpretation changed the publisher's license choice");
+    const forged=fixtureBom(metadata);forged.components[0].version="9.0.0";
+    let identity = false;
+    try {noticesFor(metadata,forged);} catch {identity=true;}
+    if (!identity) throw new Error("notice accepted a license from another actual component");
 
     const noAttribution = structuredClone(metadata);
     noAttribution.packages[1].license = "MIT-0";
-    const noAttributionNotice = generateNotices(noAttribution, vendor, licenses);
+    const noAttributionNotice = noticesFor(noAttribution);
     if (!noAttributionNotice.includes("MIT-0") ||
         !noAttributionNotice.includes("Dependency license")) {
       throw new Error("notice self-test did not preserve the MIT-0 upstream text");
@@ -636,7 +792,7 @@ function runSelfTest() {
     unknown.packages[1].license = "LicenseRef-Proprietary";
     let rejectedUnknown = false;
     try {
-      generateNotices(unknown, vendor, licenses);
+      noticesFor(unknown);
     } catch {
       rejectedUnknown = true;
     }
@@ -649,7 +805,7 @@ function runSelfTest() {
       "LGPL-2.1-or-later AND (MIT OR Apache-2.0)";
     let rejectedMandatoryCopyleft = false;
     try {
-      generateNotices(mandatoryCopyleft, vendor, licenses);
+      noticesFor(mandatoryCopyleft);
     } catch {
       rejectedMandatoryCopyleft = true;
     }
@@ -660,13 +816,13 @@ function runSelfTest() {
     const optionalCopyleft = structuredClone(metadata);
     optionalCopyleft.packages[1].license =
       "(LGPL-2.1-or-later AND Apache-2.0) OR MIT";
-    generateNotices(optionalCopyleft, vendor, licenses);
+    noticesFor(optionalCopyleft);
 
     const invalidExpression = structuredClone(metadata);
     invalidExpression.packages[1].license = "MIT Apache-2.0";
     let rejectedInvalidExpression = false;
     try {
-      generateNotices(invalidExpression, vendor, licenses);
+      noticesFor(invalidExpression);
     } catch {
       rejectedInvalidExpression = true;
     }
@@ -679,7 +835,7 @@ function runSelfTest() {
     licenseFileOnly.packages[1].license_file = "LICENSE";
     let rejectedLicenseFileOnly = false;
     try {
-      generateNotices(licenseFileOnly, vendor, licenses);
+      noticesFor(licenseFileOnly);
     } catch {
       rejectedLicenseFileOnly = true;
     }
@@ -693,7 +849,7 @@ function runSelfTest() {
     siblingEscape.packages[1].license_file = "../sibling-1.0.0/LICENSE";
     let rejectedSiblingEscape = false;
     try {
-      generateNotices(siblingEscape, vendor, licenses);
+      noticesFor(siblingEscape);
     } catch {
       rejectedSiblingEscape = true;
     }
@@ -705,7 +861,7 @@ function runSelfTest() {
     symlinkSync("/etc/passwd", join(packageDirectory, "LICENSE"));
     let rejectedLink = false;
     try {
-      generateNotices(metadata, vendor, licenses);
+      noticesFor(metadata);
     } catch {
       rejectedLink = true;
     }
@@ -715,7 +871,7 @@ function runSelfTest() {
     unlinkSync(join(packageDirectory, "LICENSE"));
     let rejectedMissingText = false;
     try {
-      generateNotices(metadata, vendor, licenses);
+      noticesFor(metadata);
     } catch {
       rejectedMissingText = true;
     }

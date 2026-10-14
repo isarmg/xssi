@@ -31,6 +31,46 @@ def decoded(value):
     return values
 
 
+def selected_metadata(metadata, selection):
+    """Restrict metadata to the separately queried package/target/feature tree.
+
+    Metadata unites workspace features. Its full graph remains source identity
+    evidence; Cargo's selected normal tree decides the runtime graph recorded
+    here. This does not replace the final binary and file inventory checks.
+    """
+    if set(selection) != {'root','ids','edges'} or not isinstance(selection['ids'],list):
+        raise ValueError('invalid selected Cargo graph authority')
+    ids=set(selection['ids'])
+    packages={item['id']:item for item in metadata['packages']}
+    nodes={item['id']:item for item in metadata['resolve']['nodes']}
+    edges=selection['edges'];root=selection['root']
+    if (not ids or len(ids)!=len(selection['ids']) or len(ids)>4096
+        or len(packages)!=len(metadata['packages']) or len(nodes)!=len(metadata['resolve']['nodes'])
+        or root not in ids or not ids<=packages.keys() or not ids<=nodes.keys() or set(edges)!=ids):
+        raise ValueError('selected Cargo graph lacks a closed unique source identity')
+    for identifier,children in edges.items():
+        if not isinstance(children,list) or len(children)!=len(set(children)) or not set(children)<=ids:
+            raise ValueError('invalid selected Cargo dependency edge')
+        if any('proc-macro' in target.get('kind',[]) for target in packages[identifier].get('targets',[])):
+            raise ValueError('selected runtime graph contains a procedural macro')
+        allowed={dependency['pkg'] for dependency in nodes[identifier]['deps']
+                 if not dependency['dep_kinds'] or any(kind['kind'] is None for kind in dependency['dep_kinds'])}
+        if not set(children)<=allowed:raise ValueError('selected tree edge differs from normal Cargo metadata')
+    reached={root};pending=[root]
+    while pending:
+        for child in edges[pending.pop()]:
+            if child not in reached:reached.add(child);pending.append(child)
+    if reached!=ids:raise ValueError('selected Cargo runtime graph has disconnected packages')
+    output=copy.deepcopy(metadata)
+    output['packages']=[item for item in output['packages'] if item['id'] in ids]
+    output['resolve']['root']=root
+    output['resolve']['nodes']=[item for item in output['resolve']['nodes'] if item['id'] in ids]
+    for node in output['resolve']['nodes']:
+        node['deps']=[dependency for dependency in node['deps'] if dependency['pkg'] in edges[node['id']]]
+        node['dependencies']=[identifier for identifier in node.get('dependencies',[]) if identifier in edges[node['id']]]
+    return output
+
+
 def normalize(bom,metadata,root_name,local_revisions,build_roots):
     if bom.get('bomFormat')!='CycloneDX' or bom.get('specVersion')!='1.5' or type(bom.get('version')) is not int or bom['version']!=1:
         raise ValueError('unsupported CycloneDX document')
@@ -79,7 +119,16 @@ def normalize(bom,metadata,root_name,local_revisions,build_roots):
                                 raise ValueError('unsafe SBOM target fragment')
                         return scan(stable+(separator+fragment if separator else ''))
         return scan(value)
-    output=walk(copy.deepcopy(bom))
+    # The mature producer can include dependencies enabled by another workspace
+    # member. Remove that independently excluded material before scanning the
+    # selected components; its local paths are neither published nor attributed
+    # to this product. Selected component fields still receive the full scan.
+    runtime_ids=reachable(metadata,root['id'])
+    selected=copy.deepcopy(bom)
+    selected['components']=[item for item in selected.get('components',[]) if item.get('bom-ref') in runtime_ids]
+    selected['dependencies']=[{'ref':node['ref'],'dependsOn':[child for child in node.get('dependsOn',[]) if child in runtime_ids]}
+                              for node in selected.get('dependencies',[]) if node['ref'] in runtime_ids]
+    output=walk(selected)
     component=output['metadata']['component']
     root_id=identifiers[root['id']]
     if component.get('name')!=root_name or component.get('version')!=root['version'] or component.get('bom-ref')!=root_id or component.get('purl')!=root_id:
@@ -102,7 +151,6 @@ def normalize(bom,metadata,root_name,local_revisions,build_roots):
         dependency_refs.add(identifier)
         dependencies[identifier]=set(children)
     if root_id not in dependency_refs:raise ValueError('SBOM has no dependency root')
-    runtime_ids=reachable(metadata,root['id'])
     required={identifiers.get(identifier,identifier) for identifier in runtime_ids}
     if not required<=refs:raise ValueError('SBOM omits a resolved runtime dependency')
     reached={root_id};pending=[root_id]

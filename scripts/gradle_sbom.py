@@ -4,7 +4,6 @@ import argparse
 import hashlib
 import io
 import json
-import os
 from pathlib import Path
 import re
 import stat
@@ -36,23 +35,8 @@ def https(url):
 
 
 def bytes_regular(path,maximum):
-    before=path.lstat()
-    if not stat.S_ISREG(before.st_mode) or path.is_symlink() or before.st_nlink!=1 or before.st_size>maximum or getattr(before,'st_file_attributes',0)&getattr(stat,'FILE_ATTRIBUTE_REPARSE_POINT',0):
-        raise ValueError('Gradle artifact is not a bounded physical file')
-    def identity(info):
-        return (info.st_dev,info.st_ino,info.st_mode,info.st_nlink,info.st_uid,info.st_gid,
-                info.st_size,info.st_mtime_ns,info.st_ctime_ns)
-    descriptor=os.open(path,os.O_RDONLY|getattr(os,'O_NOFOLLOW',0)|getattr(os,'O_NONBLOCK',0)|getattr(os,'O_BINARY',0))
-    try:
-        if identity(os.fstat(descriptor))!=identity(before):raise ValueError('Gradle artifact changed before inventory')
-        value=bytearray()
-        while chunk:=os.read(descriptor,min(65536,maximum+1-len(value))):
-            value.extend(chunk)
-            if len(value)>maximum:raise ValueError('Gradle artifact exceeds its byte bound')
-        if len(value)!=before.st_size or identity(os.fstat(descriptor))!=identity(before) or identity(path.lstat())!=identity(before):
-            raise ValueError('Gradle artifact changed during inventory')
-        return bytes(value)
-    finally:os.close(descriptor)
+    from release_sbom import bounded
+    return bounded(path,maximum)
 
 
 class PublicRedirect(urllib.request.HTTPRedirectHandler):
@@ -275,7 +259,7 @@ def produce(export,stage,product,version,revision,*,download=fetch):
          'components':components,'dependencies':[{'ref':root,'dependsOn':sorted(refs[key] for key in export['root']['dependencies'])},
             *[{'ref':refs[key],'dependsOn':sorted(refs[child] for child in item['dependencies'])} for key,item in sorted(resolved.items())]]}
     destination=share/'android-runtime-sbom.cdx.json'
-    destination.write_text(json.dumps(bom,sort_keys=True,ensure_ascii=False,indent=2)+'\n')
+    destination.write_text(json.dumps(bom,sort_keys=True,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
     return destination
 
 

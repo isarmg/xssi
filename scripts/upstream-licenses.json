@@ -1,0 +1,99 @@
+{
+  "format_version": 1,
+  "registry": [
+    {
+      "name": "jni",
+      "version": "0.22.4",
+      "package_checksum": "5efd9a482cf3a427f00d6b35f14332adc7902ce91efb778580e180ff90fa3498",
+      "repository": "https://github.com/jni-rs/jni-rs",
+      "revision": "5ae9458a4ec44c5318f37ddc7569c1d4ae8a69e7",
+      "vcs_path": "crates/jni",
+      "manifest_sha256": "420d0c6c04c3579946386ceea541bf5dd5f564b6b190e76568cce83bad0b9db3",
+      "vcs_sha256": "0619bb2725fac7b26a1935d1379d5eea7427eb987731a982500389de5efd5b8b",
+      "license": "MIT OR Apache-2.0",
+      "licenses": [
+        {
+          "name": "LICENSE-MIT",
+          "source": "https://raw.githubusercontent.com/jni-rs/jni-rs/5ae9458a4ec44c5318f37ddc7569c1d4ae8a69e7/LICENSE-MIT",
+          "sha256": "fea1d5bf3dd71605ce5d7d2ff695c1837e914c77195e523a86b5391716477960"
+        },
+        {
+          "name": "LICENSE-APACHE",
+          "source": "https://raw.githubusercontent.com/jni-rs/jni-rs/5ae9458a4ec44c5318f37ddc7569c1d4ae8a69e7/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        }
+      ]
+    },
+    {
+      "name": "objc2-core-foundation",
+      "version": "0.3.2",
+      "package_checksum": "2a180dd8642fa45cdb7dd721cd4c11b1cadd4929ce112ebd8b9f5803cc79d536",
+      "repository": "https://github.com/madsmtm/objc2",
+      "revision": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+      "vcs_path": "framework-crates/objc2-core-foundation",
+      "manifest_sha256": "44cd6a4440c3ea1ba85df240ab9b9e7a95da3a5873ce623ac426ac5acfbe507f",
+      "vcs_sha256": "1c1a87985a2bd25015f5e2413f4041379bea0172b2fce88dae3e6482b50aab26",
+      "license": "Zlib OR Apache-2.0 OR MIT",
+      "licenses": [
+        {
+          "name": "LICENSE.md",
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+          "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54"
+        },
+        {
+          "name": "APACHE-2.0.txt",
+          "source": "https://www.apache.org/licenses/LICENSE-2.0",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        }
+      ],
+      "selected_license": "Apache-2.0"
+    },
+    {
+      "name": "objc2-io-kit",
+      "version": "0.3.2",
+      "package_checksum": "33fafba39597d6dc1fb709123dfa8289d39406734be322956a69f0931c73bb15",
+      "repository": "https://github.com/madsmtm/objc2",
+      "revision": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+      "vcs_path": "framework-crates/objc2-io-kit",
+      "manifest_sha256": "b42241619a7ea451537126c0bc45d2a5b44cbbed9984e0818744e1889f425625",
+      "vcs_sha256": "f9cd70629de590df57227fdc11d9eb1d6cde8d9a35013ecf20950449c0cf176f",
+      "license": "Zlib OR Apache-2.0 OR MIT",
+      "licenses": [
+        {
+          "name": "LICENSE.md",
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+          "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54"
+        },
+        {
+          "name": "APACHE-2.0.txt",
+          "source": "https://www.apache.org/licenses/LICENSE-2.0",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        }
+      ],
+      "selected_license": "Apache-2.0"
+    },
+    {
+      "name": "rustls-platform-verifier-android",
+      "version": "0.2.0",
+      "package_checksum": "eec689c0bc40ff2458a5977b6619cb718087084a18e02a131c599b62d05e1a5f",
+      "repository": "https://github.com/rustls/rustls-platform-verifier",
+      "revision": "252e25161a91af476cbea620e29d277592d27ec7",
+      "vcs_path": "android-release-support",
+      "manifest_sha256": "e78f460d378e8fbf3cb90e96a249c8d23cd7cfc97e83cd7b95d979472de4adad",
+      "vcs_sha256": "f9de66ae77438abeb19e82916812a0266cfdbcd6a8b1ca0404f5f167daf0a43e",
+      "license": "MIT OR Apache-2.0",
+      "licenses": [
+        {
+          "name": "LICENSE-APACHE",
+          "source": "https://raw.githubusercontent.com/rustls/rustls-platform-verifier/252e25161a91af476cbea620e29d277592d27ec7/LICENSE-APACHE",
+          "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+        },
+        {
+          "name": "LICENSE-MIT",
+          "source": "https://raw.githubusercontent.com/rustls/rustls-platform-verifier/252e25161a91af476cbea620e29d277592d27ec7/LICENSE-MIT",
+          "sha256": "1c7cf76689c837a68ed8d704994e52a0f2940c087958f860d17f3186afbdcc0c"
+        }
+      ]
+    }
+  ]
+}
