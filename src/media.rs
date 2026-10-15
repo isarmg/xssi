@@ -754,8 +754,8 @@ pub fn examples(context: &ContextData, media: &Media) -> anyhow::Result<()> {
 }
 
 pub fn generate(context: &ContextData, media: &Media, _uid: u32, gid: u32) -> anyhow::Result<()> {
+    let mut pending = BTreeMap::new();
     for algorithm in &media.validation {
-        cases(context, algorithm)?;
         if algorithm.kind == "environment-v1" {
             let spec: PathSpec = serde_json::from_value(algorithm.parameters["env_path"].clone())?;
             let path = context.path(&spec)?;
@@ -776,17 +776,41 @@ pub fn generate(context: &ContextData, media: &Media, _uid: u32, gid: u32) -> an
                     output.push_str("\"\n");
                 }
                 environment(context, &algorithm.parameters, &output)?;
-                crate::filesystem::configuration(&path, output.as_bytes(), gid)?;
+                pending.insert(path, output.into_bytes());
             }
         }
     }
     let path = context.path(&media.configuration_path)?;
-    if crate::creation::active() && path.try_exists()? {
-        return Ok(());
+    if !crate::creation::active() || !path.try_exists()? {
+        pending.insert(path, render(context, media)?);
     }
-    crate::filesystem::configuration(&path, &render(context, media)?, gid)
+    // Validate the complete proposed configuration, including retained inputs,
+    // before replacing any administrator-owned configuration file.
+    check_pending(context, media, &pending)?;
+    for (path, bytes) in pending {
+        crate::filesystem::configuration(&path, &bytes, gid)?;
+    }
+    Ok(())
 }
 pub fn check(context: &ContextData, media: &Media) -> anyhow::Result<()> {
+    check_pending(context, media, &BTreeMap::new())
+}
+fn check_pending(
+    context: &ContextData,
+    media: &Media,
+    pending: &BTreeMap<std::path::PathBuf, Vec<u8>>,
+) -> anyhow::Result<()> {
+    let read = |path: &Path, maximum: u64| -> anyhow::Result<Vec<u8>> {
+        if let Some(bytes) = pending.get(path) {
+            ensure!(
+                bytes.len() as u64 <= maximum,
+                "companion input exceeds bound"
+            );
+            Ok(bytes.clone())
+        } else {
+            crate::contracts::read(path, maximum)
+        }
+    };
     ensure!(
         !media.validation.is_empty(),
         "companion current validation definitions missing"
@@ -798,7 +822,7 @@ pub fn check(context: &ContextData, media: &Media) -> anyhow::Result<()> {
             "media-yaml-v1" => yaml(
                 context,
                 p,
-                std::str::from_utf8(&crate::contracts::read(
+                std::str::from_utf8(&read(
                     &context.path(&media.configuration_path)?,
                     1024 * 1024,
                 )?)?,
@@ -808,7 +832,7 @@ pub fn check(context: &ContextData, media: &Media) -> anyhow::Result<()> {
                 environment(
                     context,
                     p,
-                    std::str::from_utf8(&crate::contracts::read(
+                    std::str::from_utf8(&read(
                         &context.path(&spec)?,
                         number(p, "maximum_bytes")?,
                     )?)?,
@@ -818,14 +842,11 @@ pub fn check(context: &ContextData, media: &Media) -> anyhow::Result<()> {
                 let cert: PathSpec = serde_json::from_value(p["certificate"].clone())?;
                 let key: PathSpec = serde_json::from_value(p["key"].clone())?;
                 pair(
-                    std::str::from_utf8(&crate::contracts::read(
+                    std::str::from_utf8(&read(
                         &context.path(&cert)?,
                         number(p, "maximum_bytes")?,
                     )?)?,
-                    std::str::from_utf8(&crate::contracts::read(
-                        &context.path(&key)?,
-                        number(p, "maximum_bytes")?,
-                    )?)?,
+                    std::str::from_utf8(&read(&context.path(&key)?, number(p, "maximum_bytes")?)?)?,
                     number(p, "maximum_bytes")?,
                 )?;
             }
@@ -856,6 +877,173 @@ pub fn check(context: &ContextData, media: &Media) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn generation_fixture(root: &Path) -> ContextData {
+        use serde_json::json;
+        let path = json!({"base":"root","value":"config/media.yml","fallback":null,"suffix":"","encoding":"path"});
+        let asset = json!({"path":"template.yml","sha256":""});
+        let mut context = ContextData {
+            contract: serde_json::from_value(json!({
+                "contract_version":1,
+                "identity":{"product":"xcos","version":"1.0.0","source_revision":"a".repeat(40),"target":"linux-x86_64","state_contract_sha256":"a".repeat(64)},
+                "schema_identity":{"application":"xcos","application_version":"1.0.0","schema_revision":1,"schema_sha256":"a".repeat(64)},
+                "authority_sources":[],
+                "config":{"schema":{},"defaults":{},"data_dir":path,"bind_pointer":"/bind","rules":[],"cases":[]},
+                "credentials":{"policy_revision":1,"username":{"normalization":"none","minimum_bytes":1,"maximum_bytes":32,"pattern":".*","reject_ascii_control":true},"password":{"minimum_bytes":1,"maximum_bytes":32,"reject_ascii_control":true},"argon2":{"algorithm":"argon2id","version":19,"memory_kib":8,"iterations":1,"parallelism":1,"output_bytes":32,"salt_bytes":16},"administrator_query":"","session_query":"","administrator_id_format":"","identifier_max_bytes":32,"identifier_random_bytes":16,"session_digest_bytes":32,"maximum_session_rows":1,"cases":[]},
+                "databases":[],"secrets":[],"writers":[],
+                "resources":{"state_paths":[],"writable_paths":[],"readonly_paths":[],"shared_paths":[],"business_paths":[],"config_write_paths":[],"private_directories":[],"business_directories":[],"runtime_locks":[]},
+                "media":{"configuration_path":path,"template":asset,"substitutions":{},"binary":asset,"contract":asset,"validation":[{
+                    "kind":"environment-v1","description":"fixture environment",
+                    "parameters":{"env_path":{"base":"root","value":"config/media.env","fallback":null,"suffix":"","encoding":"path"},"maximum_bytes":1024,"keys":{"REQUIRED":{"kind":"literal","value":"yes"}},"defaults":{"REQUIRED":"yes"},"duration":{"units":[],"minimum_nonzero_ns":"1","maximum_ns":"100","allow_plus":false}},
+                    "cases":[{"name":"valid","input":"REQUIRED=yes","valid":true},{"name":"missing-key","input":"","valid":false}]
+                }]}
+            })).unwrap(),
+            package: root.into(), root: root.into(), config_path:root.join("config/config.json"), value:json!({}), data_dir:root.join("state"),
+        };
+        std::fs::create_dir(root.join("config")).unwrap();
+        let template = b"new generated configuration\n";
+        std::fs::write(root.join("template.yml"), template).unwrap();
+        use sha2::Digest;
+        context.contract.media.as_mut().unwrap().template.sha256 = sha2::Sha256::digest(template)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        context
+    }
+
+    #[test]
+    fn regeneration_rejects_retained_invalid_environment_before_publication() {
+        let temporary = tempfile::tempdir().unwrap();
+        let context = generation_fixture(temporary.path());
+        let media = context.contract.media.as_ref().unwrap();
+        let target = context.path(&media.configuration_path).unwrap();
+        std::fs::write(&target, b"original configuration").unwrap();
+        std::fs::write(temporary.path().join("config/media.env"), b"WRONG=yes").unwrap();
+        // A non-root fixture cannot publish administrator-owned files. Reaching
+        // the content error proves rejection precedes that publication boundary.
+        let error = generate(&context, media, 1000, 1000).unwrap_err();
+        assert!(
+            error.to_string().contains("environment key set differs"),
+            "{error:#}"
+        );
+        assert_eq!(std::fs::read(target).unwrap(), b"original configuration");
+    }
+
+    #[test]
+    fn regeneration_rejects_mismatched_pem_before_publication() {
+        use serde_json::json;
+        let temporary = tempfile::tempdir().unwrap();
+        let mut context = generation_fixture(temporary.path());
+        for name in ["first", "second"] {
+            let certificate = temporary.path().join(format!("config/{name}.pem"));
+            let key = temporary.path().join(format!("config/{name}.key"));
+            crate::subprocess::bounded(
+                Path::new("/usr/bin/openssl"),
+                &[
+                    "req".into(),
+                    "-x509".into(),
+                    "-newkey".into(),
+                    "ec".into(),
+                    "-pkeyopt".into(),
+                    "ec_paramgen_curve:P-256".into(),
+                    "-noenc".into(),
+                    "-keyout".into(),
+                    key.to_str().unwrap().into(),
+                    "-out".into(),
+                    certificate.to_str().unwrap().into(),
+                    "-subj".into(),
+                    "/CN=fixture".into(),
+                    "-days".into(),
+                    "1".into(),
+                ],
+                3,
+                65536,
+            )
+            .unwrap();
+        }
+        let certificate =
+            std::fs::read_to_string(temporary.path().join("config/first.pem")).unwrap();
+        let key = std::fs::read_to_string(temporary.path().join("config/first.key")).unwrap();
+        context.contract.media.as_mut().unwrap().validation.push(serde_json::from_value(json!({
+            "kind":"pem-keypair-v1","description":"fixture pair",
+            "parameters":{"maximum_bytes":65536,
+                "certificate":{"base":"root","value":"config/first.pem","fallback":null,"suffix":"","encoding":"path"},
+                "key":{"base":"root","value":"config/second.key","fallback":null,"suffix":"","encoding":"path"}},
+            "cases":[{"name":"matching","valid":true,"input":{"certificate_pem":certificate,"key_pem":key}}]
+        })).unwrap());
+        let media = context.contract.media.as_ref().unwrap();
+        let target = context.path(&media.configuration_path).unwrap();
+        std::fs::write(&target, b"original configuration").unwrap();
+        std::fs::write(temporary.path().join("config/media.env"), b"REQUIRED=yes").unwrap();
+        let error = generate(&context, media, 1000, 1000).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("certificate and private key do not match"),
+            "{error:#}"
+        );
+        assert_eq!(std::fs::read(&target).unwrap(), b"original configuration");
+        let environment = temporary.path().join("config/media.env");
+        std::fs::remove_file(&environment).unwrap();
+        let error = generate(&context, media, 1000, 1000).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("certificate and private key do not match"),
+            "{error:#}"
+        );
+        assert!(
+            !environment.exists(),
+            "invalid PEM must not publish default environment"
+        );
+        assert_eq!(std::fs::read(target).unwrap(), b"original configuration");
+    }
+
+    #[test]
+    fn candidate_defaults_validate_without_publishing_missing_environment() {
+        let temporary = tempfile::tempdir().unwrap();
+        let context = generation_fixture(temporary.path());
+        let media = context.contract.media.as_ref().unwrap();
+        let environment = temporary.path().join("config/media.env");
+        let pending = BTreeMap::from([(environment.clone(), b"REQUIRED=yes".to_vec())]);
+        check_pending(&context, media, &pending).unwrap();
+        assert!(!environment.exists());
+        assert!(check_pending(&context, media, &BTreeMap::new()).is_err());
+    }
+
+    #[test]
+    fn candidate_yaml_can_repair_invalid_existing_yaml() {
+        use serde_json::json;
+        let temporary = tempfile::tempdir().unwrap();
+        let mut context = generation_fixture(temporary.path());
+        context.contract.resources.business_paths.push(
+            serde_json::from_value(json!({
+                "base":"root","value":"recordings","fallback":null,"suffix":"","encoding":"path"
+            }))
+            .unwrap(),
+        );
+        let candidate = format!(
+            "managed: yes\nrecordPath: \"{}/recordings/%path/date\"\n",
+            temporary.path().display()
+        );
+        context.contract.media.as_mut().unwrap().validation.push(serde_json::from_value(json!({
+            "kind":"media-yaml-v1","description":"fixture YAML",
+            "parameters":{"scalars":{"managed":"yes"},"record_path":{"key":"recordPath","resource":"/resources/business_paths/0","separator":"/%path/"}},
+            "cases":[{"name":"valid","valid":true,"input":candidate}]
+        })).unwrap());
+        let media = context.contract.media.as_ref().unwrap();
+        let target = context.path(&media.configuration_path).unwrap();
+        std::fs::write(&target, b"broken YAML").unwrap();
+        std::fs::write(temporary.path().join("config/media.env"), b"REQUIRED=yes").unwrap();
+        assert!(check(&context, media).is_err());
+        check_pending(
+            &context,
+            media,
+            &BTreeMap::from([(target.clone(), candidate.into_bytes())]),
+        )
+        .unwrap();
+        assert_eq!(std::fs::read(target).unwrap(), b"broken YAML");
+    }
+
     #[test]
     fn current_pem_contract_examples_generate_matching_and_distinct_keys() {
         let mut algorithm: Algorithm = serde_json::from_value(serde_json::json!({
