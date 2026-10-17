@@ -114,6 +114,16 @@ class WasmReceiptTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'compiled Server provenance'):
             self.generate()
 
+    def test_source_change_during_dependency_inventory_is_rejected(self):
+        producer = self.producer
+        def changed(*args, **kwargs):
+            result = producer(*args, **kwargs)
+            (self.root / 'Cargo.toml').write_bytes(self.files['Cargo.toml'] + b'# changed during inventory\n')
+            return result
+        with patch.object(wasm_receipt.sbom, 'produce_runtime_cargo_bom', side_effect=changed):
+            with self.assertRaisesRegex(ValueError, 'source changed'):
+                self.frontend.generate()
+
     def test_changed_target_features_profile_and_runtime_edges_are_rejected(self):
         original = copy.deepcopy(self.frontend.receipt['rust'])
         for field, value in [('target', 'x86_64-unknown-linux-gnu'), ('features', ['ssr']),

@@ -147,8 +147,8 @@ function generateNotices(metadataDocument, vendorPath, licensePath, rootName, bo
     const sources = [];
     const includedChoices = new Set(licenseFiles.map(item => item.selected).filter(Boolean));
     if (includedChoices.size > 1) throw new Error("conflicting original license choices");
-    const digests = licenseFiles.map(({path, source}) => {
-      if (source) sources.push(source);
+    const digests = licenseFiles.map(({path, source, kind}) => {
+      if (source) sources.push(`${kind === "standard-spdx" ? "Standard SPDX license text source" : kind === "publisher-declaration" ? "Publisher license declaration source" : "Original license source"}: ${source}`);
       const bytes = readFileSync(path);
       if (bytes.includes(0)) {
         throw new Error(
@@ -199,6 +199,8 @@ function generateNotices(metadataDocument, vendorPath, licensePath, rootName, bo
     "This file is generated from Cargo's locked, non-development dependency " +
       "graph. Each package entry preserves the declared license metadata and the " +
       "SHA-256 digest of the included license text.",
+    "Publisher declarations and standard SPDX texts are labeled separately; " +
+      "standard templates do not identify a publisher's copyright holders.",
     "",
     "PACKAGE INDEX",
     "",
@@ -209,7 +211,7 @@ function generateNotices(metadataDocument, vendorPath, licensePath, rootName, bo
       `  Declared license: ${record.license}`,
       ...(record.expression !== record.license ?
         [`  Resolved SPDX expression: ${record.expression}`] : []),
-      ...record.sources.map(source => `  Original license source: ${source}`),
+      ...record.sources.map(source => `  ${source}`),
       ...(record.selected ? [`  Included license choice: ${record.selected}`] : []),
       ...record.digests.map(digest => `  License text SHA-256: ${digest}`),
       "",
@@ -596,6 +598,13 @@ function recordedUpstreamLicenses(package_, sourceDirectory, physicalLicenseRoot
   if (!Array.isArray(record.licenses) || record.licenses.length === 0 || record.licenses.length > 32) {
     throw new Error("upstream license receipt has no complete original texts");
   }
+  if (record.standard_license !== undefined &&
+      (!["MIT", "Apache-2.0"].includes(record.standard_license) ||
+       record.selected_license !== record.standard_license || record.licenses.length !== 2 ||
+       record.licenses.filter(item => item.kind === "publisher-declaration").length !== 1 ||
+       record.licenses.filter(item => item.kind === "standard-spdx").length !== 1)) {
+    throw new Error("standard license text lacks one explicit publisher declaration and choice");
+  }
   return record.licenses.map(item => {
     if (typeof item.path !== "string" || item.path.includes("\\") || item.path.split("/").some(part => !part || part === "." || part === "..") ||
         !/^[0-9a-f]{64}$/u.test(item.sha256) || typeof item.source !== "string" || !item.source.startsWith("https://") ||
@@ -604,7 +613,22 @@ function recordedUpstreamLicenses(package_, sourceDirectory, physicalLicenseRoot
     if (createHash("sha256").update(readFileSync(path)).digest("hex") !== item.sha256) {
       throw new Error("original upstream license text differs from its source receipt");
     }
-    return {path, source: item.source, selected: record.selected_license};
+    if (item.kind === "publisher-declaration") {
+      const original = physicalRegular(sourceDirectory, join(sourceDirectory, "Cargo.toml.orig"));
+      if (record.standard_license === undefined || checksum.files?.["Cargo.toml.orig"] !== item.sha256 ||
+          !readFileSync(path).equals(readFileSync(original)) ||
+          item.source !== `https://static.crates.io/crates/${package_.name}/${package_.name}-${package_.version}.crate#Cargo.toml.orig`) {
+        throw new Error("publisher license declaration differs from its exact crate archive");
+      }
+    } else if (item.kind === "standard-spdx") {
+      if (record.standard_license === undefined ||
+          item.source !== `https://spdx.org/licenses/${record.standard_license}.txt`) {
+        throw new Error("standard license text differs from its reviewed SPDX source");
+      }
+    } else if (item.kind !== undefined) {
+      throw new Error("unreviewed license source kind");
+    }
+    return {path, source: item.source, selected: record.selected_license, kind: item.kind};
   });
 }
 
@@ -878,6 +902,36 @@ function runSelfTest() {
     if (!rejectedMissingText) {
       throw new Error("notice self-test substituted a generic license text");
     }
+    const declaration = '[package]\nname="dependency"\nversion="1.0.0"\nlicense="MIT"\n';
+    const declarationSha = createHash("sha256").update(declaration).digest("hex");
+    writeFileSync(join(packageDirectory, "Cargo.toml.orig"), declaration);
+    writeFileSync(join(packageDirectory, ".cargo_vcs_info.json"), JSON.stringify({git:{sha1:"b".repeat(40)}}));
+    writeFileSync(join(packageDirectory, ".cargo-checksum.json"), JSON.stringify({package:"a".repeat(64),files:{"Cargo.toml.orig":declarationSha}}));
+    const reviewed = join(licenses, "xssi-upstream-licenses");
+    const materials = join(reviewed, "dependency-1.0.0");
+    mkdirSync(materials, {recursive:true});
+    writeFileSync(join(materials, "PUBLISHER-LICENSE-DECLARATION.toml"), declaration);
+    const standard = "MIT standard text fixture; no publisher copyright is invented.\n";
+    writeFileSync(join(materials, "SPDX-MIT.txt"), standard);
+    const licenseReceipt = {format_version:1,packages:[{
+      name:"dependency",version:"1.0.0",source:metadata.packages[1].source,
+      repository:"https://github.com/example/dependency",revision:"b".repeat(40),
+      package_checksum:"a".repeat(64),standard_license:"MIT",selected_license:"MIT",licenses:[
+        {path:"dependency-1.0.0/PUBLISHER-LICENSE-DECLARATION.toml",sha256:declarationSha,
+         kind:"publisher-declaration",source:"https://static.crates.io/crates/dependency/dependency-1.0.0.crate#Cargo.toml.orig"},
+        {path:"dependency-1.0.0/SPDX-MIT.txt",sha256:createHash("sha256").update(standard).digest("hex"),
+         kind:"standard-spdx",source:"https://spdx.org/licenses/MIT.txt"}]}]};
+    writeFileSync(join(reviewed,"receipt.json"),JSON.stringify(licenseReceipt));
+    const standardNotice=noticesFor(metadata);
+    if (!standardNotice.includes("Standard SPDX license text source:") ||
+        !standardNotice.includes("Publisher license declaration source:") ||
+        standardNotice.includes("Original license source: https://spdx.org/")) {
+      throw new Error("notice did not distinguish publisher declarations from standard license text");
+    }
+    writeFileSync(join(materials,"PUBLISHER-LICENSE-DECLARATION.toml"),declaration+"# altered\n");
+    let rejectedDeclaration=false;
+    try {noticesFor(metadata);} catch {rejectedDeclaration=true;}
+    if (!rejectedDeclaration) throw new Error("notice accepted a changed publisher declaration");
   } finally {
     rmSync(root, { force: true, recursive: true });
   }

@@ -203,6 +203,15 @@ def inventory(source,manifest,root_name,features,environment,stage,label,local_s
     (source/'xssi-cargo-source-checksums.json').write_text(json.dumps({'format_version':1,'packages':checksums}),encoding='utf-8')
     from upstream_licenses import prepare
     prepare(source,metadata,set(selection['ids']),environment)
+    # Keep reviewed declarations and standard/original source bytes separately
+    # from the readable aggregate; the release file inventory binds their exact
+    # hashes and labels without reconstructing publisher copyright notices.
+    from frontend_receipt import retain
+    reviewed=source/'xssi-upstream-licenses'
+    for path in sorted(reviewed.rglob('*')):
+        if path.is_file():
+            retain(stage,'share/licenses/'+label+'-upstream/'+path.relative_to(reviewed).as_posix(),
+                   bounded(path,1024*1024))
     notices=stage/'share'/f'THIRD_PARTY_{label.upper()}_LICENSES.txt'
     run(['node',str(ROOT/'scripts/generate-third-party-notices.mjs'),str(metadata_path),str(source/'xssi-vendor'),str(source),str(notices),root_name,str(destination)],source,environment)
     if not bounded(notices,16*1024*1024).strip():raise ValueError('release dependency notices are empty')

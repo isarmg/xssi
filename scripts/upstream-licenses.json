@@ -166,6 +166,291 @@
           "sha256": "71674605ec4c087fe9eb534e3e4f9e26eb2e4aabcd76a29fd156c6a844d44b3d"
         }
       ]
+    },
+    {
+      "name": "any_spawner",
+      "version": "0.3.0",
+      "package_checksum": "1384d3fe1eecb464229fcf6eebb72306591c56bf27b373561489458a7c73027d",
+      "repository": "https://github.com/leptos-rs/leptos",
+      "revision": "9b2e313d20c89603ddc0deb7b1133e60c877faed",
+      "vcs_path": "any_spawner",
+      "manifest_sha256": "c275641a74fb7e85e7eca10e551068686dcdf923d42e834f097904157b21cc10",
+      "vcs_sha256": "ef7a78710ee17d00ce8170174019f979075663beab6b3d5dde3978c7fe4a80db",
+      "license": "MIT",
+      "licenses": [
+        {
+          "name": "LICENSE",
+          "source": "https://raw.githubusercontent.com/leptos-rs/leptos/9b2e313d20c89603ddc0deb7b1133e60c877faed/LICENSE",
+          "sha256": "76356e713a0d1ea0bde549f4236b01c750100ab31790019843faa5aec449310f"
+        }
+      ]
+    },
+    {
+      "name": "const_str_slice_concat",
+      "version": "0.1.0",
+      "package_checksum": "f67855af358fcb20fac58f9d714c94e2b228fe5694c1c9b4ead4a366343eda1b",
+      "repository": "https://github.com/leptos-rs/leptos",
+      "revision": "4e23d2b6f1cb74ef7eb08b40ef7f14baa85a7285",
+      "vcs_path": "const_str_slice_concat",
+      "manifest_sha256": "912c57bb7ea002fa6b213c86d6823cf7b68d7d5cc0c549164df8e16ad280813a",
+      "vcs_sha256": "ecb7e4b780aa36bb6c2587149e1650478057ef0bf7c8e1b77188c835c51f1346",
+      "license": "MIT",
+      "licenses": [
+        {
+          "name": "LICENSE",
+          "source": "https://raw.githubusercontent.com/leptos-rs/leptos/4e23d2b6f1cb74ef7eb08b40ef7f14baa85a7285/LICENSE",
+          "sha256": "76356e713a0d1ea0bde549f4236b01c750100ab31790019843faa5aec449310f"
+        }
+      ]
+    },
+    {
+      "name": "either_of",
+      "version": "0.1.9",
+      "package_checksum": "5060e0a4cbf26a87550792688ade88e6b8aec9208613631a7a363bda7bc2d4cd",
+      "repository": "https://github.com/leptos-rs/leptos",
+      "revision": "fbc9ed631ff8c19c5eed02a1d4459e202cff7043",
+      "vcs_path": "either_of",
+      "manifest_sha256": "1c90c9da41ac2cb350a7d29a1b2ae6a814726f1bcb0632b1d9428466915bb757",
+      "vcs_sha256": "71a4dba70643047ff7ed970abc7704465aff46234dd0b21e9a5456c1f79b7444",
+      "license": "MIT",
+      "licenses": [
+        {
+          "name": "LICENSE",
+          "source": "https://raw.githubusercontent.com/leptos-rs/leptos/fbc9ed631ff8c19c5eed02a1d4459e202cff7043/LICENSE",
+          "sha256": "76356e713a0d1ea0bde549f4236b01c750100ab31790019843faa5aec449310f"
+        }
+      ]
+    },
+    {
+      "name": "gloo-events",
+      "version": "0.2.0",
+      "package_checksum": "27c26fb45f7c385ba980f5fa87ac677e363949e065a083722697ef1b2cc91e41",
+      "repository": "https://github.com/rustwasm/gloo/tree/master/crates/events",
+      "revision": "f3bb1d1a1c33dbcccaf26446aca7d0cea8e9d574",
+      "vcs_path": "crates/events",
+      "manifest_sha256": "6f57c8ae7939c0076203cb68c4e8aaba004e78b2a2cc24e49d5b8f3097044744",
+      "vcs_sha256": "e5a356d9cc63e335e552bda71aa33ab451b3becc9cd64cebdf96c26dc4157455",
+      "license": "MIT OR Apache-2.0",
+      "licenses": [
+        {
+          "name": "LICENSE-MIT",
+          "source": "https://raw.githubusercontent.com/rustwasm/gloo/f3bb1d1a1c33dbcccaf26446aca7d0cea8e9d574/LICENSE-MIT",
+          "sha256": "5a6f5443ea473f130adbdcf84254761d1292bc79759b5253915d4b5e7afbef66"
+        },
+        {
+          "name": "LICENSE-APACHE",
+          "source": "https://raw.githubusercontent.com/rustwasm/gloo/f3bb1d1a1c33dbcccaf26446aca7d0cea8e9d574/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        }
+      ]
+    },
+    {
+      "name": "gloo-timers",
+      "version": "0.3.0",
+      "package_checksum": "bbb143cf96099802033e0d4f4963b19fd2e0b728bcf076cd9cf7f6634f092994",
+      "repository": "https://github.com/rustwasm/gloo/tree/master/crates/timers",
+      "revision": "f3bb1d1a1c33dbcccaf26446aca7d0cea8e9d574",
+      "vcs_path": "crates/timers",
+      "manifest_sha256": "435d5b96b17e6c2536484fea1402f20d03984cd58f0f632f50808d548b5c7b1c",
+      "vcs_sha256": "b9cd64f2c7f504731396fb99e28c49626e9ad56cfd35097beac8af6b6c2b8ecd",
+      "license": "MIT OR Apache-2.0",
+      "licenses": [
+        {
+          "name": "LICENSE-MIT",
+          "source": "https://raw.githubusercontent.com/rustwasm/gloo/f3bb1d1a1c33dbcccaf26446aca7d0cea8e9d574/LICENSE-MIT",
+          "sha256": "5a6f5443ea473f130adbdcf84254761d1292bc79759b5253915d4b5e7afbef66"
+        },
+        {
+          "name": "LICENSE-APACHE",
+          "source": "https://raw.githubusercontent.com/rustwasm/gloo/f3bb1d1a1c33dbcccaf26446aca7d0cea8e9d574/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        }
+      ]
+    },
+    {
+      "name": "leptos_dom",
+      "version": "0.8.8",
+      "package_checksum": "35742e9ed8f8aaf9e549b454c68a7ac0992536e06856365639b111f72ab07884",
+      "repository": "https://github.com/leptos-rs/leptos",
+      "revision": "da62c0cb9a1d814cf480c2f1dae5f67f4ea4773f",
+      "vcs_path": "leptos_dom",
+      "manifest_sha256": "79b6662bfad265ef2e9ec1e25632e3cdc685ee4ef62fd8823e0b26295d7c94c6",
+      "vcs_sha256": "40ef1987b3cc875e684b92b48a4e0aad4e8af0d0eb3c957dd850a71800785a35",
+      "license": "MIT",
+      "licenses": [
+        {
+          "name": "LICENSE",
+          "source": "https://raw.githubusercontent.com/leptos-rs/leptos/da62c0cb9a1d814cf480c2f1dae5f67f4ea4773f/LICENSE",
+          "sha256": "76356e713a0d1ea0bde549f4236b01c750100ab31790019843faa5aec449310f"
+        }
+      ]
+    },
+    {
+      "name": "next_tuple",
+      "version": "0.1.0",
+      "package_checksum": "60993920e071b0c9b66f14e2b32740a4e27ffc82854dcd72035887f336a09a28",
+      "repository": "https://github.com/leptos-rs/leptos",
+      "revision": "d665dd4b89151e5d797df3db5cd2260cbe1e8fae",
+      "vcs_path": "next_tuple",
+      "manifest_sha256": "e5eafb8bee6ffdd734f736ba11ebd7b10b7ca215cfd1e3c3dc9bde5a9a4a9a9a",
+      "vcs_sha256": "eff5f4ef39bbdebf1c3271ae4c22e22ed98066d1428fb1870c0d0a329a6b1d34",
+      "license": "MIT",
+      "licenses": [
+        {
+          "name": "LICENSE",
+          "source": "https://raw.githubusercontent.com/leptos-rs/leptos/d665dd4b89151e5d797df3db5cd2260cbe1e8fae/LICENSE",
+          "sha256": "76356e713a0d1ea0bde549f4236b01c750100ab31790019843faa5aec449310f"
+        }
+      ]
+    },
+    {
+      "name": "oco_ref",
+      "version": "0.2.1",
+      "package_checksum": "ed0423ff9973dea4d6bd075934fdda86ebb8c05bdf9d6b0507067d4a1226371d",
+      "repository": "https://github.com/leptos-rs/leptos",
+      "revision": "5f2d5115537d08043bba0293c406c4f9b97a4dae",
+      "vcs_path": "oco",
+      "manifest_sha256": "6aef5c106296a30a634b23114a6422dde6cb5e6fbc6452151250889329afb3d9",
+      "vcs_sha256": "6ab76efd9963776d3a7e9b3296d1975b93064e197e91dc712e43fdd51b30dcb6",
+      "license": "MIT",
+      "licenses": [
+        {
+          "name": "LICENSE",
+          "source": "https://raw.githubusercontent.com/leptos-rs/leptos/5f2d5115537d08043bba0293c406c4f9b97a4dae/LICENSE",
+          "sha256": "76356e713a0d1ea0bde549f4236b01c750100ab31790019843faa5aec449310f"
+        }
+      ]
+    },
+    {
+      "name": "or_poisoned",
+      "version": "0.1.0",
+      "package_checksum": "8c04f5d74368e4d0dfe06c45c8627c81bd7c317d52762d118fb9b3076f6420fd",
+      "repository": "https://github.com/leptos-rs/leptos",
+      "revision": "6865c1f951bfa0bc5b107aa69286a110cd6f45ca",
+      "vcs_path": "or_poisoned",
+      "manifest_sha256": "e92e1bb783f4a4ee8075c0f91cedb47ad51acd1ae4e7350e3be5a4b86798eff6",
+      "vcs_sha256": "5c55c4eaee797524ccd51deeaf0f5d647302288a921cd5e369965127824d141b",
+      "license": "MIT",
+      "licenses": [
+        {
+          "name": "LICENSE",
+          "source": "https://raw.githubusercontent.com/leptos-rs/leptos/6865c1f951bfa0bc5b107aa69286a110cd6f45ca/LICENSE",
+          "sha256": "76356e713a0d1ea0bde549f4236b01c750100ab31790019843faa5aec449310f"
+        }
+      ]
+    },
+    {
+      "name": "reactive_graph",
+      "version": "0.2.16",
+      "package_checksum": "3bcec36a2d1b9a53a4129b3270b19e3df6f6b88c2e7c97ed9404dc9307f137d7",
+      "repository": "https://github.com/leptos-rs/leptos",
+      "revision": "fa7f7bd30bf3b835c00bf4878339d8672a94490a",
+      "vcs_path": "reactive_graph",
+      "manifest_sha256": "0d5b1495797dcb86a2ebfedc32691e052edce6999d21a3a2adec762da2eafc77",
+      "vcs_sha256": "29fb8d47a6c52175179e05734306af359d3b83e43fb7223ec9face48234488c9",
+      "license": "MIT",
+      "licenses": [
+        {
+          "name": "LICENSE",
+          "source": "https://raw.githubusercontent.com/leptos-rs/leptos/fa7f7bd30bf3b835c00bf4878339d8672a94490a/LICENSE",
+          "sha256": "76356e713a0d1ea0bde549f4236b01c750100ab31790019843faa5aec449310f"
+        }
+      ]
+    },
+    {
+      "name": "tachys",
+      "version": "0.2.19",
+      "package_checksum": "e47e2220bb9d2a3be976a22a0fb7685a0b84499bb11ea5cb3bbc82907675ac68",
+      "repository": "https://github.com/leptos-rs/leptos",
+      "revision": "584c3a2d884b0e4dba9e3f822a9b6982cff072c7",
+      "vcs_path": "tachys",
+      "manifest_sha256": "454c5631e605d822f72bff5616b67093c86daaa7864e2f30c05f0c05af57d80e",
+      "vcs_sha256": "6721ecc1af0859fef4476055505264fda4d3762e8d5c08ce05bc34ce8b12d419",
+      "license": "MIT",
+      "licenses": [
+        {
+          "name": "LICENSE",
+          "source": "https://raw.githubusercontent.com/leptos-rs/leptos/584c3a2d884b0e4dba9e3f822a9b6982cff072c7/LICENSE",
+          "sha256": "76356e713a0d1ea0bde549f4236b01c750100ab31790019843faa5aec449310f"
+        }
+      ]
+    },
+    {
+      "name": "throw_error",
+      "version": "0.3.1",
+      "package_checksum": "dc0ed6038fcbc0795aca7c92963ddda636573b956679204e044492d2b13c8f64",
+      "repository": "https://github.com/leptos-rs/leptos",
+      "revision": "43359694b6596f88d911b9c8d8d92a121c27d0ce",
+      "vcs_path": "any_error",
+      "manifest_sha256": "67f66c33460a727aa58ba6cc9a0afe41adcf252b9ee0a68edafde7fd4bf2322b",
+      "vcs_sha256": "8501c0c75c58b6e97be29311e8f7004ec35cec1c486ba3e0f258831a2a6e7b0e",
+      "license": "MIT",
+      "licenses": [
+        {
+          "name": "LICENSE",
+          "source": "https://raw.githubusercontent.com/leptos-rs/leptos/43359694b6596f88d911b9c8d8d92a121c27d0ce/LICENSE",
+          "sha256": "76356e713a0d1ea0bde549f4236b01c750100ab31790019843faa5aec449310f"
+        }
+      ]
+    },
+    {
+      "name": "wasm_split_helpers",
+      "version": "0.2.3",
+      "package_checksum": "ab578aae2fe2916edaea06843187d50f87b0965622da0ceef648edca27b385ba",
+      "repository": "https://github.com/WorldSEnder/wasm-split-prototype",
+      "revision": "d8263b20578e8c49b02851009ae3bc7d43c567bd",
+      "vcs_path": "crates/wasm_split",
+      "manifest_sha256": "6606f24778c60f82e8c4f9676e61a18f7175191c1fa7bd5a0bd1ff930b3a76ee",
+      "vcs_sha256": "a183d40d572f02b8ddde905b3654cc69950f631522947bf08ddcf7ba0c59364f",
+      "license": "MIT OR Apache-2.0",
+      "licenses": [
+        {
+          "name": "LICENSE",
+          "source": "https://raw.githubusercontent.com/WorldSEnder/wasm-split-prototype/d8263b20578e8c49b02851009ae3bc7d43c567bd/LICENSE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        }
+      ],
+      "selected_license": "Apache-2.0"
+    },
+    {
+      "name": "drain_filter_polyfill",
+      "version": "0.1.3",
+      "package_checksum": "669a445ee724c5c69b1b06fe0b63e70a1c84bc9bb7d9696cd4f4e3ec45050408",
+      "repository": "https://github.com/whentze/drain_filter_polyfill.git",
+      "revision": "9dc585f3eec048bfc3faf8656e07c4a19273c38f",
+      "vcs_path": "",
+      "manifest_sha256": "9a20e81178ae493a1524696028fbf0a8d279a97595e69c5f2c4a8353a9aa7176",
+      "vcs_sha256": "faeaa27f206ad901e29513c171bbaf7583ce58dc88686b493aec7de4eac6d155",
+      "license": "MIT OR Apache-2.0",
+      "licenses": [
+        {
+          "name": "SPDX-Apache-2.0.txt",
+          "source": "https://spdx.org/licenses/Apache-2.0.txt",
+          "sha256": "c274f80372d90c012937370f0e1f15087d22e308ef98b27cea5dc0d2d088366c"
+        }
+      ],
+      "standard_license": "Apache-2.0",
+      "selected_license": "Apache-2.0"
+    },
+    {
+      "name": "erased",
+      "version": "0.1.2",
+      "package_checksum": "a1731451909bde27714eacba19c2566362a7f35224f52b153d3f42cf60f72472",
+      "repository": "https://github.com/JonathanBrouwer/erased",
+      "revision": "60eebad28ab2578a6322199099b8a07035438008",
+      "vcs_path": "",
+      "manifest_sha256": "05dd025524337ef6224a0878d4a580774d5981e1c63d9c7c2fe449b88fff703e",
+      "vcs_sha256": "8187550cc58a252c0b780e49845b9e2942b2984d227362324c1350399b66001e",
+      "license": "MIT",
+      "licenses": [
+        {
+          "name": "SPDX-MIT.txt",
+          "source": "https://spdx.org/licenses/MIT.txt",
+          "sha256": "c3b1b78bc8bd3ea13aa4bc9778442d16560270afa235006d816e5e88cef24db4"
+        }
+      ],
+      "standard_license": "MIT",
+      "selected_license": "MIT"
     }
   ]
 }

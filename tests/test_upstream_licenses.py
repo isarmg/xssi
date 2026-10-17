@@ -198,11 +198,52 @@ class UpstreamLicenses(unittest.TestCase):
                     self.invoke(root, package, definitions, text)
                 self.assertFalse((root / 'xssi-upstream-licenses').exists())
 
+    def test_repository_display_subtree_and_git_suffix_bind_the_owning_commit(self):
+        for suffix in ('.git', '/tree/master/crates/fixture'):
+            with self.subTest(suffix=suffix), tempfile.TemporaryDirectory() as temporary:
+                root, directory, package, definitions, text = self.fixture(temporary)
+                package['repository'] += suffix
+                definitions['registry'][0]['repository'] = package['repository']
+                self.invoke(root, package, definitions, text)
+        with tempfile.TemporaryDirectory() as temporary:
+            root, directory, package, definitions, text = self.fixture(temporary)
+            package['repository'] += '/tree/master/crates/another'
+            definitions['registry'][0]['repository'] = package['repository']
+            with self.assertRaisesRegex(ValueError, 'archive VCS path'):
+                self.invoke(root, package, definitions, text)
+
+    def test_explicit_standard_text_preserves_publisher_declaration_without_invented_copyright(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root, directory, package, definitions, text = self.fixture(temporary)
+            definition = definitions['registry'][0]
+            definition.update(standard_license='Apache-2.0', selected_license='Apache-2.0',
+                licenses=[{'name': 'SPDX-Apache-2.0.txt', 'source': 'https://spdx.org/licenses/Apache-2.0.txt',
+                           'sha256': hashlib.sha256(text).hexdigest()}])
+            self.invoke(root, package, definitions, text)
+            receipt = json.loads((root / 'xssi-upstream-licenses/receipt.json').read_text())['packages'][0]
+            self.assertEqual(receipt['standard_license'], 'Apache-2.0')
+            self.assertEqual([item['kind'] for item in receipt['licenses']], ['publisher-declaration', 'standard-spdx'])
+            declaration = root / 'xssi-upstream-licenses' / receipt['licenses'][0]['path']
+            self.assertEqual(declaration.read_bytes(), (directory / 'Cargo.toml.orig').read_bytes())
+            self.assertEqual(receipt['licenses'][0]['sha256'], definition['manifest_sha256'])
+
+    def test_standard_text_cannot_select_an_unoffered_or_unknown_license(self):
+        for standard in ('MIT', 'LicenseRef-Custom'):
+            with self.subTest(standard=standard), tempfile.TemporaryDirectory() as temporary:
+                root, directory, package, definitions, text = self.fixture(temporary)
+                definitions['registry'][0].update(standard_license=standard, selected_license=standard,
+                    licenses=[{'name': 'SPDX-' + standard + '.txt', 'source': 'https://spdx.org/licenses/' + standard + '.txt',
+                               'sha256': hashlib.sha256(text).hexdigest()}])
+                with self.assertRaisesRegex(ValueError, 'publisher SPDX declaration'):
+                    self.invoke(root, package, definitions, text)
     def test_reviewed_real_data_has_only_exact_sources_and_original_hashes(self):
         definitions = upstream.reviewed()
         self.assertEqual({r['name'] for r in definitions['registry']},
                          {'jni', 'objc2-core-foundation', 'objc2-io-kit', 'rustls-platform-verifier-android',
-                          'jsonschema-regex', 'jsonschema-value', 'uuid-simd', 'vsimd'})
+                          'jsonschema-regex', 'jsonschema-value', 'uuid-simd', 'vsimd',
+                          'any_spawner', 'const_str_slice_concat', 'drain_filter_polyfill', 'either_of', 'erased',
+                          'gloo-events', 'gloo-timers', 'leptos_dom', 'next_tuple', 'oco_ref', 'or_poisoned',
+                          'reactive_graph', 'tachys', 'throw_error', 'wasm_split_helpers'})
         for r in definitions['registry']:
             self.assertRegex(r['revision'], '^[0-9a-f]{40}$')
             for key in ('package_checksum', 'manifest_sha256', 'vcs_sha256'):

@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import re
 import sys
+import tomllib
 import urllib.request
 from urllib.parse import urlsplit
 
@@ -28,10 +29,12 @@ def reviewed():
 
 def _public(url):
     parsed = urlsplit(url)
-    if (parsed.scheme != 'https' or parsed.hostname not in ('raw.githubusercontent.com', 'www.apache.org')
+    if (parsed.scheme != 'https' or parsed.hostname not in ('raw.githubusercontent.com', 'www.apache.org', 'spdx.org')
             or parsed.username or parsed.password or parsed.port is not None
             or parsed.query or parsed.fragment or not parsed.path.startswith('/')):
         raise ValueError('upstream license source is not its reviewed public HTTPS endpoint')
+    if parsed.hostname == 'spdx.org' and parsed.path not in ('/licenses/MIT.txt', '/licenses/Apache-2.0.txt'):
+        raise ValueError('standard license source is not an explicitly supported SPDX text')
 
 
 class _Redirects(urllib.request.HTTPRedirectHandler):
@@ -105,7 +108,7 @@ def _present(package, source):
 
 def _registry(package, directory, definition):
     authority.fields(definition, ['name', 'version', 'package_checksum', 'repository', 'revision',
-                     'vcs_path', 'manifest_sha256', 'vcs_sha256', 'license', 'licenses'], ['selected_license'])
+                     'vcs_path', 'manifest_sha256', 'vcs_sha256', 'license', 'licenses'], ['selected_license', 'standard_license'])
     if package['source'] != REGISTRY or package.get('repository') != definition['repository'] or package.get('license') != definition['license']:
         raise ValueError('registry package differs from its reviewed license authority')
     checksum = authority.load(directory / '.cargo-checksum.json')
@@ -125,11 +128,33 @@ def _registry(package, directory, definition):
     repository = urlsplit(definition['repository'])
     if repository.scheme != 'https' or repository.netloc != 'github.com' or repository.query or repository.fragment:
         raise ValueError('registry source has no reviewed owning repository')
-    prefix = 'https://raw.githubusercontent.com' + repository.path + '/' + definition['revision'] + '/'
+    parts = repository.path.strip('/').split('/')
+    if (len(parts) < 2 or not all(re.fullmatch(r'[A-Za-z0-9_.-]+', part) for part in parts[:2])
+            or (len(parts) != 2 and (len(parts) < 5 or parts[2] != 'tree'
+                or '/'.join(parts[4:]) != definition['vcs_path']))):
+        raise ValueError('registry repository subtree differs from the exact archive VCS path')
+    # Cargo accepts a repository link to a monorepo crate subtree or a .git URL.
+    # Original license authority is still the owning repository's exact commit,
+    # never a branch named by the display link.
+    owning = '/' + parts[0] + '/' + parts[1].removesuffix('.git')
+    prefix = 'https://raw.githubusercontent.com' + owning + '/' + definition['revision'] + '/'
+    standard = definition.get('standard_license')
+    if standard is not None:
+        declaration = tomllib.loads(_file(directory / 'Cargo.toml.orig').decode('utf-8'))
+        if (standard not in ('MIT', 'Apache-2.0') or definition.get('selected_license') != standard
+                or declaration.get('package', {}).get('license') != definition['license']
+                or definition['license'] not in ('MIT', 'Apache-2.0', 'MIT OR Apache-2.0')
+                or standard not in definition['license'].split(' OR ')
+                or len(definition['licenses']) != 1
+                or definition['licenses'][0]['name'] != 'SPDX-' + standard + '.txt'
+                or definition['licenses'][0]['source'] != 'https://spdx.org/licenses/' + standard + '.txt'):
+            raise ValueError('standard text is not bound to an explicit publisher SPDX declaration')
     for item in definition['licenses']:
         url = item['source']
         if url.startswith(prefix):
             authority.relative(url[len(prefix):])
+        elif standard is not None and url == 'https://spdx.org/licenses/' + standard + '.txt':
+            pass
         elif not (package['name'] in ('objc2-core-foundation', 'objc2-io-kit')
                   and package['version'] == '0.3.2' and definition.get('selected_license') == 'Apache-2.0'
                   and item['name'] == 'APACHE-2.0.txt' and url == 'https://www.apache.org/licenses/LICENSE-2.0'):
@@ -180,10 +205,20 @@ def prepare(source_root, metadata, selected_ids, environment):
     material = {}
     for package, definition, revision, licenses in pending:
         record = {key: package[key] for key in ('name', 'version', 'source')}
-        record.update(repository=definition['repository'], revision=revision, licenses=[])
+        repository = urlsplit(definition['repository'])
+        owning = 'https://github.com/' + '/'.join(repository.path.strip('/').split('/')[:2]).removesuffix('.git')
+        record.update(repository=owning, revision=revision, licenses=[])
         record['package_checksum'] = definition['package_checksum']
         if 'selected_license' in definition:
             record['selected_license'] = definition['selected_license']
+        if 'standard_license' in definition:
+            record['standard_license'] = definition['standard_license']
+            original = _file(Path(package['manifest_path']).parent / 'Cargo.toml.orig')
+            path = package['name'] + '-' + package['version'] + '/PUBLISHER-LICENSE-DECLARATION.toml'
+            material[path] = original
+            record['licenses'].append({'name': 'PUBLISHER-LICENSE-DECLARATION.toml', 'path': path,
+                'sha256': definition['manifest_sha256'], 'kind': 'publisher-declaration',
+                'source': 'https://static.crates.io/crates/' + package['name'] + '/' + package['name'] + '-' + package['version'] + '.crate#Cargo.toml.orig'})
         if not re.fullmatch('[A-Za-z0-9_-]+', package['name']) or not re.fullmatch('[A-Za-z0-9.+-]+', package['version']):
             raise ValueError('upstream license output has an invalid package name or version')
         for item in licenses:
@@ -200,7 +235,10 @@ def prepare(source_root, metadata, selected_ids, environment):
             if path in material:
                 raise ValueError('upstream original license repeats an output')
             material[path] = data
-            record['licenses'].append({'name': item['name'], 'path': path, 'sha256': expected, 'source': item['source']})
+            retained = {'name': item['name'], 'path': path, 'sha256': expected, 'source': item['source']}
+            if 'standard_license' in definition:
+                retained['kind'] = 'standard-spdx'
+            record['licenses'].append(retained)
         if not record['licenses']:
             raise ValueError('upstream original license receipt is empty')
         receipts.append(record)

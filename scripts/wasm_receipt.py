@@ -132,6 +132,7 @@ def generate(receipt, source, stage, outputs, binary):
                            bounded(path, 1024 * 1024))
         graph = authority.load(bom)
         root = graph['metadata']['component']['bom-ref']
+    validate(receipt, source, outputs)
     # Retained evidence binds the producer graph, actual compiled source and
     # WASM hashes; the final runtime root also binds the embedding Server bytes.
     retain(stage, 'share/build-inputs/wasm/runtime.json',

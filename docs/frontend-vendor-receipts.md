@@ -17,3 +17,5 @@ Rust 资源构建器可以直接读取已纳入产品源码的 ESM、CSS、字�
 工具只在私有源码快照中重新解析 `wasm32-unknown-unknown` 的正常依赖，排除 proc macro、build 和 dev 依赖，再与编译时图核对。复用已有 Cargo SBOM 和原始许可证生成器，额外保留 `share/wasm-sbom.cdx.json`、`share/wasm-Cargo.lock`、`share/THIRD_PARTY_WASM_LICENSES.txt`、本地依赖许可证和 `share/build-inputs/wasm/runtime.json`。最终发行 SBOM 将浏览器 Cargo 图绑定到实际嵌入资源的 Server 摘要。
 
 运行图表达所选目标的依赖关系，不宣称每个依赖的全部代码都在优化后保留。边界回归为 `python3 -B -m unittest discover -s tests -p test_wasm_receipt.py`；实际产品构建和发行物验收另行记录。
+
+原始许可文件缺失时，先检查与实际 crate 归档校验和、原始 manifest 和 VCS 身份绑定的上游精确修订，保留其中真实的许可及 NOTICE。`drain_filter_polyfill 0.1.3` 与 `erased 0.1.2` 的精确源码仅在 manifest 声明标准 SPDX 许可，因此现有 `upstream-licenses.json` 为这两项显式绑定原始 `Cargo.toml.orig` 声明与 SPDX 官方标准全文及摘要。生成材料分别标记 `publisher-declaration`、`standard-spdx`；原始字节和回执另外保存在 `share/licenses/wasm-upstream/`，便于直接核对摘要。不冒称标准全文是上游原始 LICENSE，不填造版权人或年份。未知包、含义冲突、自定义许可或摘要不符仍拒绝；此规则不自动为缺失文件套用通用 MIT 文本。
