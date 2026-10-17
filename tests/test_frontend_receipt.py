@@ -11,6 +11,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
 import sys
 import tarfile
 import tempfile
@@ -107,6 +108,32 @@ class FrontendReceiptTests(unittest.TestCase):
             raise ValueError('fixture upstream SHA differs')
         return value
 
+    def vendor_package(self, owner, destination, mapping=None):
+        package=json.loads((self.web/owner/'package.json').read_text())
+        if mapping is None:
+            mapping={path.relative_to(self.web/owner).as_posix():path.relative_to(self.web/owner).as_posix()
+                     for path in (self.web/owner).rglob('*') if path.is_file()}
+        files={}
+        for name,original in mapping.items():
+            content=(self.web/owner/original).read_bytes()
+            target=self.web/destination/name
+            target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes(content)
+            files[name]=digest(content)
+        source={'format':1,'package':package['name'],'version':package['version'],'license':package['license'],
+                'origin':self.lock['packages'][owner]['resolved'],'files':files,
+                'npm':{**package,**{key:self.lock['packages'][owner][key] for key in ('resolved','integrity')},'archive_files':mapping}}
+        (self.web/destination/'SOURCE.json').write_text(json.dumps(source))
+        return source
+
+    def native_vendors(self):
+        self.vendor_package('node_modules/runtime-lib','vendor/runtime',{'runtime.mjs':'index.js','LICENSE':'LICENSE'})
+        font_owner='node_modules/@xcss/web'
+        mapping={path.relative_to(self.web/font_owner).as_posix().removeprefix('dist/'):path.relative_to(self.web/font_owner).as_posix()
+                 for path in (self.web/font_owner).rglob('*') if path.is_file() and path.name!='package.json'}
+        self.vendor_package(font_owner,'vendor/xcss',mapping)
+        self.receipt['modules'][1]['path']='vendor/runtime/runtime.mjs'
+        shutil.rmtree(self.web/'node_modules')
+
     def generate(self):
         (self.web / 'package-lock.json').write_text(json.dumps(self.lock))
         self.metadata.write_text(json.dumps(self.receipt))
@@ -127,6 +154,66 @@ class FrontendReceiptTests(unittest.TestCase):
         self.assertEqual(cjk['source'],{'url':self.cjk_url,'sha256':digest(self.cjk)})
         self.assertEqual(font['dependencies'],[cjk['ref']])
         self.assertTrue((self.stage/'share/build-inputs/frontend/font-provenance.json').is_file())
+
+    def test_vendored_runtime_and_fonts_need_no_installed_npm_tree(self):
+        self.native_vendors()
+        self.lock={'lockfileVersion':3,'packages':{}}
+        components=self.generate()
+        runtime=next(item for item in components if item['name']=='runtime-lib')
+        self.assertEqual(runtime['embedding']['source_files'],[{'path':'web/vendor/runtime/runtime.mjs','sha256':digest(self.runtime_code)}])
+        font=next(item for item in components if item['name']=='Maple Mono complete fonts')
+        self.assertTrue(all(item['path'].startswith('web/vendor/xcss/') for item in font['embedding']['source_files']))
+
+    def test_vendor_inventory_cannot_relabel_changed_original_bytes(self):
+        self.native_vendors()
+        changed=b'export const runtime = 1000;\n'
+        (self.web/'vendor/runtime/runtime.mjs').write_bytes(changed)
+        source_path=self.web/'vendor/runtime/SOURCE.json'
+        source=json.loads(source_path.read_text());source['files']['runtime.mjs']=digest(changed)
+        source_path.write_text(json.dumps(source))
+        self.receipt['modules'][1]['sha256']=digest(changed)
+        with self.assertRaisesRegex(ValueError,'original npm distribution'):
+            self.generate()
+
+    def test_vendor_unlisted_file_and_escaping_archive_map_are_rejected(self):
+        self.native_vendors()
+        (self.web/'vendor/runtime/extra.js').write_text('extra')
+        with self.assertRaisesRegex(ValueError,'exact source inventory'):
+            self.generate()
+        (self.web/'vendor/runtime/extra.js').unlink()
+        source_path=self.web/'vendor/runtime/SOURCE.json'
+        source=json.loads(source_path.read_text());source['npm']['archive_files']['runtime.mjs']='../index.js'
+        source_path.write_text(json.dumps(source))
+        with self.assertRaisesRegex(ValueError,'canonical and relative'):
+            self.generate()
+
+    def test_vendor_cannot_hide_files_under_release_control_names(self):
+        self.native_vendors()
+        for name in ('share/package.json','share/package.sha256','share/release-sbom.cdx.json'):
+            with self.subTest(name=name):
+                extra=self.web/'vendor/runtime'/name
+                extra.parent.mkdir(parents=True,exist_ok=True);extra.write_text('unlisted')
+                with self.assertRaisesRegex(ValueError,'exact source inventory'):
+                    self.generate()
+                extra.unlink()
+
+    def test_two_vendored_font_providers_are_ambiguous(self):
+        self.native_vendors()
+        shutil.copytree(self.web/'vendor/xcss',self.web/'web/vendor/xcss')
+        with self.assertRaisesRegex(ValueError,'ambiguous'):
+            self.generate()
+
+    def test_vendor_cannot_skip_an_original_file_mapping_or_archive_integrity(self):
+        self.native_vendors()
+        source_path=self.web/'vendor/runtime/SOURCE.json';source=json.loads(source_path.read_text())
+        missing=copy.deepcopy(source);missing['npm']['archive_files'].pop('LICENSE')
+        source_path.write_text(json.dumps(missing))
+        with self.assertRaisesRegex(ValueError,'map every source'):
+            self.generate()
+        source['npm']['integrity']='sha512-'+base64.b64encode(bytes(64)).decode()
+        source_path.write_text(json.dumps(source))
+        with self.assertRaisesRegex(ValueError,'lock integrity'):
+            self.generate()
 
     def test_missing_entire_rendered_module_graph_is_rejected(self):
         self.receipt['modules'] = []

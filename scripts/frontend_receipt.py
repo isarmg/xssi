@@ -1,4 +1,4 @@
-"""Bind actual rendered npm modules and fonts to the compiled Server payload."""
+"""Bind rendered npm or vendored runtime inputs to the compiled Server payload."""
 import base64
 import hashlib
 import io
@@ -100,18 +100,70 @@ def output_inventory(entries,compiled=False):
     return result
 
 
+def vendor_inventory(root):
+    """Source inventories have no release-control filename exclusions."""
+    root=sbom.physical_directory(root)
+    result={};total=0
+    def walk_error(error):raise error
+    for directory,directories,names in os.walk(root,followlinks=False,onerror=walk_error):
+        sbom.physical_directory(directory)
+        for name in directories:
+            sbom.physical_directory(Path(directory)/name)
+        for name in names:
+            path=Path(directory)/name
+            total+=path.lstat().st_size
+            if len(result)>=MAX_MODULES or total>MAX_ARCHIVE:
+                raise ValueError('runtime vendor source exceeds its aggregate bound')
+            result[sbom.relative(path.relative_to(root).as_posix())]=sbom.digest(path)
+    return result
+
+
 class Packages:
     def __init__(self,root):
         self.root=root
-        lock=sbom.load(root/'package-lock.json')
-        if lock.get('lockfileVersion')!=3:
+        lock=sbom.load(root/'package-lock.json') if (root/'package-lock.json').exists() else {'lockfileVersion':3,'packages':{}}
+        if lock.get('lockfileVersion')!=3 or not isinstance(lock.get('packages'),dict):
             raise ValueError('runtime npm graph requires the exact current lock format')
-        self.lock=lock['packages'];self.loaded={};self.archive_bytes=0;self.expanded_bytes=0
+        self.lock=lock['packages'];self.loaded={};self.vendors={};self.archive_bytes=0;self.expanded_bytes=0
+
+    def vendor(self,path):
+        """Require an exact file map, then prove every byte against the npm archive."""
+        path=sbom.relative(path)
+        if path in self.vendors:return self.vendors[path]
+        source=sbom.load(self.root/path/'SOURCE.json')
+        sbom.fields(source,['format','package','version','license','origin','files','npm'])
+        if type(source['format'])is not int or source['format']!=1 or not isinstance(source['files'],dict):
+            raise ValueError('runtime vendor requires a current exact source inventory')
+        npm=source.get('npm');sbom.fields(npm,['name','version','license','resolved','integrity','archive_files'])
+        for key in ('name','version','license','resolved','integrity'):sbom.text(npm[key])
+        public_https(npm['resolved'])
+        if source['origin']!=npm['resolved']:
+            raise ValueError('runtime vendor origin differs from its original archive')
+        if source.get('package')!=npm['name'] or source.get('version')!=npm['version'] or source.get('license')!=npm['license']:
+            raise ValueError('runtime vendor identity differs from its original distribution declaration')
+        mapping=npm['archive_files']
+        if not isinstance(mapping,dict) or not source['files'] or len(source['files'])>MAX_MODULES or mapping.keys()!=source['files'].keys():
+            raise ValueError('runtime vendor must map every source input to its original archive')
+        expected={sbom.relative(name):sbom.sha(value) for name,value in source['files'].items()}
+        for name in mapping.values():sbom.relative(name)
+        actual=vendor_inventory(self.root/path)
+        actual.pop('SOURCE.json',None)
+        if actual!=expected:
+            raise ValueError('runtime vendor differs from its exact source inventory')
+        self.vendors[path]=npm
+        return npm
 
     def archive(self,path):
         path=sbom.relative(path)
         if path in self.loaded:return self.loaded[path]
-        package=sbom.load(self.root/path/'package.json');lock=self.lock[path]
+        vendor=self.vendors.get(path)
+        if vendor is None and not path.startswith('node_modules/'):
+            vendor=self.vendor(path)
+        if vendor is not None:
+            package={key:vendor[key] for key in ('name','version','license')};lock=vendor
+        else:
+            if path not in self.lock:raise ValueError('rendered npm package has no exact lock owner')
+            package=sbom.load(self.root/path/'package.json');lock=self.lock[path]
         if package['version']!=lock['version']:
             raise ValueError('rendered npm package differs from its locked version')
         archive=download(lock['resolved'])
@@ -151,6 +203,11 @@ class Packages:
             raise ValueError('actual npm distribution identity differs from the rendered package')
         if original.get('license')!=package.get('license'):
             raise ValueError('rendered npm license metadata differs from its original distribution')
+        if vendor is not None:
+            for name,original_name in vendor['archive_files'].items():
+                content=files.get(original_name)
+                if content is None or hashlib.sha256(content).hexdigest()!=sbom.digest(self.root/path/name):
+                    raise ValueError('runtime vendor input differs from its original npm distribution')
         result={'package':package,'files':files,'source':{'url':lock['resolved'],'sha256':hashlib.sha256(archive).hexdigest()}}
         self.loaded[path]=result;return result
 
@@ -160,8 +217,29 @@ class Packages:
             name=current.as_posix()
             if name in self.lock and name.startswith('node_modules/'):
                 return name
+            if (self.root/current/'SOURCE.json').exists():
+                self.vendor(name)
+                return name
             current=current.parent
-        raise ValueError('rendered third-party input has no exact npm lock owner')
+        if path.startswith('node_modules/') or 'vendor' in Path(path).parts:
+            raise ValueError('rendered third-party input has no exact source owner')
+        return None
+
+    def sdk_fonts(self):
+        candidates=[path for path in self.vendors if self.vendors[path]['name']=='@xcss/web']
+        for path in ('vendor/xcss','web/vendor/xcss'):
+            if path not in candidates and (self.root/path/'SOURCE.json').exists() and self.vendor(path)['name']=='@xcss/web':
+                candidates.append(path)
+        if len(candidates)>1:raise ValueError('font inputs have ambiguous vendored source owners')
+        if candidates:
+            owner=candidates[0];self.archive(owner)
+            mapping=self.vendors[owner]['archive_files']
+            original='dist/web-fonts/provenance.json'
+            matches=[name for name,value in mapping.items() if value==original]
+            if len(matches)!=1:raise ValueError('vendored font provenance requires one original archive input')
+            return owner,(self.root/owner/matches[0]).parent
+        owner='node_modules/@xcss/web';self.archive(owner)
+        return owner,self.root/owner/'dist/web-fonts'
 
 
 def original_notices(package,stage,name):
@@ -237,9 +315,11 @@ def rendered_components(source_root,root,stage,data,recorded,target_files):
             path=sbom.relative(path)
             if sbom.digest(root/path)!=sbom.sha(item['sha256']):
                 raise ValueError('actual rendered input changed after the build')
-            if not path.startswith('node_modules/'):continue
-            owner=packages.owner(path);package=packages.archive(owner)
+            owner=packages.owner(path)
+            if owner is None:continue
+            package=packages.archive(owner)
             name=Path(path).relative_to(owner).as_posix()
+            if owner in packages.vendors:name=packages.vendors[owner]['archive_files'][name]
             if package['files'].get(name) is None or hashlib.sha256(package['files'][name]).hexdigest()!=item['sha256']:
                 raise ValueError('rendered npm input differs from its original distribution')
             group=owner
@@ -300,10 +380,11 @@ def generate(source_root,stage,metadata,binary):
         raise ValueError('rendered Web output is not present in the actual compiled Server')
     target={'path':sbom.relative(binary),'sha256':sbom.digest(stage/binary),'archive_entry':None}
     components,packages=rendered_components(source_root,root,stage,data,recorded,lambda names:[target])
-    sdk=packages.archive('node_modules/@xcss/web')
+    sdk_owner,font_directory=packages.sdk_fonts()
+    sdk=packages.archive(sdk_owner)
     provenance_raw=sdk['files']['dist/web-fonts/provenance.json']
     provenance=json.loads(provenance_raw,object_pairs_hook=unique_fields)
-    provenance_path=root/'node_modules/@xcss/web/dist/web-fonts/provenance.json'
+    provenance_path=font_directory/'provenance.json'
     if sbom.digest(provenance_path)!=hashlib.sha256(provenance_raw).hexdigest():
         raise ValueError('font source provenance differs from its original npm distribution')
     retain(stage,'share/build-inputs/frontend/font-provenance.json',provenance_raw)
@@ -313,7 +394,7 @@ def generate(source_root,stage,metadata,binary):
         original=sdk['files']['dist/web-fonts/'+name]
         if hashlib.sha256(original).hexdigest()!=expected or expected not in compiled_hashes:
             raise ValueError('current complete font differs from its original source or compiled resource')
-        path=root/'node_modules/@xcss/web/dist/web-fonts'/name
+        path=font_directory/name
         if sbom.digest(path)!=expected:raise ValueError('compiled font input differs from its provenance')
         font_files.append({'path':path.relative_to(source_root).as_posix(),'sha256':expected})
     licenses=[]
