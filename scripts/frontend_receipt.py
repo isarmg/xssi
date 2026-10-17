@@ -363,7 +363,7 @@ def generate(source_root,stage,metadata,binary):
     if directory!='.':sbom.relative(directory)
     root=(source_root/directory).resolve(strict=True)
     if not root.is_relative_to(source_root):raise ValueError('runtime Web build root escaped the source')
-    data=sbom.load(metadata);sbom.fields(data,['format_version','distribution','modules','outputs'])
+    data=sbom.load(metadata);sbom.fields(data,['format_version','distribution','modules','outputs'],['rust'])
     if type(data['format_version'])is not int or data['format_version']!=1:
         raise ValueError('rendered Web inventory has an unsupported version')
     distribution=root/sbom.relative(data['distribution'])
@@ -378,6 +378,19 @@ def generate(source_root,stage,metadata,binary):
     compiled_hashes=set(compiled_files.values())
     if recorded!=compiled_files or any('size' in item and item['size']!=(distribution/item['path']).stat().st_size for item in compiled['files']):
         raise ValueError('rendered Web output is not present in the actual compiled Server')
+    if any(name.endswith('.wasm') for name in recorded):
+        if 'rust' not in data:
+            raise ValueError('compiled WASM has no actual Rust runtime graph receipt')
+        provenance='assets/xcss-web-build.json'
+        if provenance not in recorded:
+            raise ValueError('compiled WASM has no embedded Rust build provenance')
+        embedded=sbom.load(distribution/provenance).get('rust_runtime')
+        if embedded!={key:value for key,value in data['rust'].items() if key!='outputs'}:
+            raise ValueError('Rust runtime receipt differs from the compiled Server provenance')
+        from wasm_receipt import generate as wasm_inventory
+        wasm_inventory(data['rust'],source_root,stage,recorded,binary)
+    elif 'rust' in data:
+        raise ValueError('Rust runtime receipt has no actual WASM output')
     target={'path':sbom.relative(binary),'sha256':sbom.digest(stage/binary),'archive_entry':None}
     components,packages=rendered_components(source_root,root,stage,data,recorded,lambda names:[target])
     sdk_owner,font_directory=packages.sdk_fonts()

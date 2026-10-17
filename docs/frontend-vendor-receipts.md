@@ -9,3 +9,11 @@ Rust 资源构建器可以直接读取已纳入产品源码的 ESM、CSS、字�
 模块、依赖边、交付资源和服务端二进制摘要仍沿用既有绑定合同；这一扩展不改变发布审批、安装、网络暴露或候选程序执行规则。Rust 前端构建不需要 Node；现有独立的发布脚本及浏览器测试工具链仍各自保留。
 
 验证：`python3 -m unittest discover -s tests -p test_frontend_receipt.py`。测试使用真实 tar/SRI/源码摘要与模块图 fixture，只替换网络获取；这些 fixture 不是已编译产品的证明。
+
+## Rust 与 WASM 运行依赖
+
+六个 Server 的原生构建器在前端回执中记录 `rust`：实际 WASM 输出摘要、独立 Cargo manifest 与锁文件、全部本地 Rust 输入摘要、工具链、目标、构建配置和所选运行依赖图。同一构建定义也进入随 Server 嵌入的 `assets/xcss-web-build.json`；打包时两者必须一致。含 WASM 却没有 Rust 回执、遗漏输出或改变源码、锁文件、目标和依赖边，均拒绝打包。
+
+工具只在私有源码快照中重新解析 `wasm32-unknown-unknown` 的正常依赖，排除 proc macro、build 和 dev 依赖，再与编译时图核对。复用已有 Cargo SBOM 和原始许可证生成器，额外保留 `share/wasm-sbom.cdx.json`、`share/wasm-Cargo.lock`、`share/THIRD_PARTY_WASM_LICENSES.txt`、本地依赖许可证和 `share/build-inputs/wasm/runtime.json`。最终发行 SBOM 将浏览器 Cargo 图绑定到实际嵌入资源的 Server 摘要。
+
+运行图表达所选目标的依赖关系，不宣称每个依赖的全部代码都在优化后保留。边界回归为 `python3 -B -m unittest discover -s tests -p test_wasm_receipt.py`；实际产品构建和发行物验收另行记录。

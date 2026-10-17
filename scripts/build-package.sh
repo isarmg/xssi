@@ -44,7 +44,9 @@ if identity['product']=='xcos':
     data['components'].extend(components)
     import json
     receipt.write_text(json.dumps(data,sort_keys=True,indent=2)+'\n');receipt.chmod(0o644)
-release_sbom.finalize(stage,[stage/'share/server-sbom.cdx.json',stage/'share/setup-sbom.cdx.json'],
+dependency_boms=[stage/'share/server-sbom.cdx.json',stage/'share/setup-sbom.cdx.json']
+if (stage/'share/wasm-sbom.cdx.json').exists():dependency_boms.append(stage/'share/wasm-sbom.cdx.json')
+release_sbom.finalize(stage,dependency_boms,
                      stage/'share/external-components.json',identity['product'],identity['version'],
                      identity['source_revision'],identity['target'],build_input_root=source)
 PYFINAL
