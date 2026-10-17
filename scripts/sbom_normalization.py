@@ -183,4 +183,9 @@ def normalize(bom,metadata,root_name,local_revisions,build_roots):
                             for identifier,children in sorted(runtime_edges.items())]
     output['metadata']['properties']=[*output['metadata'].get('properties',[]),
         {'name':'dependency-scope','value':'resolved normal runtime dependencies for the selected target and features'}]
+    # These optional producer-run fields are not release source evidence. Keep
+    # them out of delivered bytes so identical inventories do not vary with a
+    # random UUID or wall clock. This does not imply reproducible compilation.
+    output.pop('serialNumber',None)
+    output['metadata'].pop('timestamp',None)
     return output

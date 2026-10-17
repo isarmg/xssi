@@ -67,11 +67,22 @@ def verify():
             raise AssertionError('selected runtime metadata retained another workspace member feature')
         raw=json.loads((source/'xssi-release.cdx.json').read_text(encoding='utf-8'))
         encoded=(stage/'share/server-sbom.cdx.json').read_bytes()
+        # Exercise the actual producer twice, not only a hand-written BOM.
+        # UUID/time fields may differ, but delivered inventory bytes must not.
+        sbom.run(['cargo','cyclonedx','--manifest-path',str(source/'Cargo.toml'),
+                  '--format','json','--spec-version','1.5','--override-filename','xssi-release.cdx',
+                  '--all','--target',sbom.TARGET,'--quiet'],source,environment)
+        repeated=json.loads((source/'xssi-release.cdx.json').read_text(encoding='utf-8'))
+        delivered=json.loads(encoded)
+        if 'serialNumber' in delivered or 'timestamp' in delivered['metadata']:
+            raise AssertionError('optional producer-run identity leaked into delivery')
         if '\u0456' not in encoded.decode('utf-8'):
             raise AssertionError('actual Unicode Cargo metadata did not survive UTF-8 serialization')
         revisions={record['id']:('1'*40 if record['name']=='xssi_fixture' else '2'*40) for record in metadata['packages'] if record['source'] is None}
         def normalized(value):return normalize(value,metadata,'xssi_fixture',revisions,[str(source),str(library)])
         normalized(raw)
+        if json.dumps(normalized(raw),sort_keys=True)!=json.dumps(normalized(repeated),sort_keys=True):
+            raise AssertionError('identical actual Cargo inventory changed normalized SBOM bytes')
         fnv=next(record for record in metadata['packages'] if record['name']=='fnv')
         if fnv['version']!='1.0.7' or fnv['license']!='Apache-2.0 / MIT':
             raise AssertionError('producer did not use the reviewed original fnv metadata')

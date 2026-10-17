@@ -1,4 +1,5 @@
 import copy
+import json
 from pathlib import Path
 import sys
 import unittest
@@ -27,6 +28,25 @@ class SbomTests(unittest.TestCase):
         self.assertEqual(result['components'][0]['purl'],'pkg:cargo/xocs@1.0.5?source_revision='+'2'*40)
         self.assertNotIn('components',result['metadata']['component'])
         self.assertEqual(self.bom['metadata']['component']['bom-ref'],self.root)
+
+    def test_optional_producer_run_fields_do_not_change_delivered_bytes(self):
+        original=copy.deepcopy(self.bom)
+        results=[]
+        for serial,timestamp in [
+            ('urn:uuid:00000000-0000-4000-8000-000000000001','2026-01-01T00:00:00Z'),
+            ('urn:uuid:00000000-0000-4000-8000-000000000002','2026-10-17T11:00:00Z'),
+        ]:
+            raw=copy.deepcopy(original)
+            raw['serialNumber']=serial
+            raw['metadata']['timestamp']=timestamp
+            normalized=self.run_bom(raw)
+            self.assertNotIn('serialNumber',normalized)
+            self.assertNotIn('timestamp',normalized['metadata'])
+            self.assertEqual(normalized,self.run_bom(original))
+            self.assertEqual(raw['serialNumber'],serial)
+            self.assertEqual(raw['metadata']['timestamp'],timestamp)
+            results.append(json.dumps(normalized,sort_keys=True,ensure_ascii=False,indent=2).encode())
+        self.assertEqual(results[0],results[1])
 
     def test_missing_transitive_dependency_or_forged_root_is_rejected(self):
         for mode in ('missing','root','duplicate','dangling','disconnected','edge'):
