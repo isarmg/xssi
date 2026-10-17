@@ -9,6 +9,7 @@ import re
 import stat
 import tarfile
 import time
+import tomllib
 import urllib.request
 
 import release_sbom as sbom
@@ -127,10 +128,12 @@ class Packages:
         self.lock=lock['packages'];self.loaded={};self.vendors={};self.archive_bytes=0;self.expanded_bytes=0
 
     def vendor(self,path):
-        """Require an exact file map, then prove every byte against the npm archive."""
+        """Require an exact file map bound to its original distribution."""
         path=sbom.relative(path)
         if path in self.vendors:return self.vendors[path]
         source=sbom.load(self.root/path/'SOURCE.json')
+        if 'base_revision' in source:
+            return self.git_vendor(path,source)
         sbom.fields(source,['format','package','version','license','origin','files','npm'])
         if type(source['format'])is not int or source['format']!=1 or not isinstance(source['files'],dict):
             raise ValueError('runtime vendor requires a current exact source inventory')
@@ -153,12 +156,73 @@ class Packages:
         self.vendors[path]=npm
         return npm
 
+    def git_vendor(self,path,source):
+        """Bind xcss CSR startup inputs to their exact official source revision."""
+        sbom.fields(source,['format','package','version','origin','base_revision','source_directory','files'])
+        revision=source['base_revision']
+        if (type(source['format'])is not int or source['format']!=1
+                or source['origin']!='https://github.com/isarmg/xcss'
+                or source['package']!='xcss-web' or source['source_directory']!='web/xcss-web'
+                or not isinstance(revision,str) or not re.fullmatch('[0-9a-f]{40}',revision)):
+            raise ValueError('runtime Git vendor differs from the current xcss source contract')
+        sbom.text(source['version'])
+        if not isinstance(source['files'],dict) or not 1<=len(source['files'])<=MAX_MODULES:
+            raise ValueError('runtime Git vendor requires a bounded exact source inventory')
+        expected={sbom.relative(name):sbom.sha(value) for name,value in source['files'].items()}
+        if not {'Cargo.toml','LICENSE'}<=expected.keys():
+            raise ValueError('runtime Git vendor lacks its package identity or original license')
+        actual=vendor_inventory(self.root/path);actual.pop('SOURCE.json',None)
+        if actual!=expected:
+            raise ValueError('runtime Git vendor differs from its exact source inventory')
+        url='https://codeload.github.com/isarmg/xcss/tar.gz/'+revision
+        archive=download(url);self.archive_bytes+=len(archive)
+        if self.archive_bytes>MAX_ARCHIVE:
+            raise ValueError('runtime source archives exceed their aggregate bound')
+        # The public exporter copies the repository license beside the crate.
+        mapping={('LICENSE' if name=='LICENSE' else 'web/xcss-web/'+name):name for name in expected}
+        prefix='xcss-'+revision+'/'
+        files={};seen=set();total=0
+        with tarfile.open(fileobj=io.BytesIO(archive),mode='r:gz') as contents:
+            for item in contents:
+                name=item.name.removesuffix('/')
+                if name==prefix[:-1] and item.isdir():continue
+                if not name.startswith(prefix):
+                    raise ValueError('runtime Git archive has an unexpected revision root')
+                name=sbom.relative(name.removeprefix(prefix))
+                if name in seen or len(seen)>=MAX_MODULES:
+                    raise ValueError('runtime Git archive repeats a path or exceeds its entry bound')
+                seen.add(name)
+                if item.isdir():continue
+                if not item.isfile() or type(item.size)is not int or item.size<0:
+                    raise ValueError('runtime Git archive contains an uncontrolled entry')
+                total+=item.size
+                if item.size>MAX_ARCHIVE or self.expanded_bytes+total>MAX_ARCHIVE:
+                    raise ValueError('runtime Git archive exceeds its extraction bound')
+                if name not in mapping:continue
+                content=contents.extractfile(item).read(item.size+1)
+                relative=mapping[name]
+                if len(content)!=item.size or hashlib.sha256(content).hexdigest()!=expected[relative]:
+                    raise ValueError('runtime Git vendor input differs from its original source revision')
+                files[relative]=content
+        self.expanded_bytes+=total
+        if files.keys()!=expected.keys():
+            raise ValueError('runtime Git vendor input is absent from its original source revision')
+        package=tomllib.loads(files['Cargo.toml'].decode())['package']
+        if package.get('name')!=source['package'] or package.get('version')!=source['version']:
+            raise ValueError('runtime Git vendor identity differs from its original source revision')
+        package={key:sbom.text(package[key]) for key in ('name','version','license')}
+        self.vendors[path]={**package,'archive_files':{name:name for name in files}}
+        self.loaded[path]={'package':package,'files':files,'kind':'git',
+                          'source':{'url':url,'sha256':hashlib.sha256(archive).hexdigest()}}
+        return self.vendors[path]
+
     def archive(self,path):
         path=sbom.relative(path)
         if path in self.loaded:return self.loaded[path]
         vendor=self.vendors.get(path)
         if vendor is None and not path.startswith('node_modules/'):
             vendor=self.vendor(path)
+            if path in self.loaded:return self.loaded[path]
         if vendor is not None:
             package={key:vendor[key] for key in ('name','version','license')};lock=vendor
         else:
@@ -332,7 +396,7 @@ def rendered_components(source_root,root,stage,data,recorded,target_files):
     for owner in sources:
         package=packages.archive(owner.split('#',1)[0])
         name=package['package']['name'];version=package['package']['version']
-        ref='urn:rendered-npm:'+name+':'+version+(':'+owner.split('#',1)[1] if '#' in owner else '')
+        ref='urn:rendered-'+package.get('kind','npm')+':'+name+':'+version+(':'+owner.split('#',1)[1] if '#' in owner else '')
         refs[owner]=ref
         notice=packages.archive(aliases.get(owner,owner.split('#',1)[0]))
         licenses=original_notices(notice,stage,name.replace('/','-'))

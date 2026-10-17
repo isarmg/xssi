@@ -134,6 +134,30 @@ class FrontendReceiptTests(unittest.TestCase):
         self.receipt['modules'][1]['path']='vendor/runtime/runtime.mjs'
         shutil.rmtree(self.web/'node_modules')
 
+    def git_csr_runtime(self):
+        owner='xcss-web/vendor/xcss-web'
+        revision='a'*40
+        files={'Cargo.toml':b'[package]\nname = "xcss-web"\nversion = "1.0.0"\nlicense = "Apache-2.0"\n',
+               'LICENSE':b'Original Apache-2.0 fixture grant and copyright.\n',
+               'startup.js':self.runtime_code}
+        source={'format':1,'package':'xcss-web','version':'1.0.0','origin':'https://github.com/isarmg/xcss',
+                'base_revision':revision,'source_directory':'web/xcss-web',
+                'files':{name:digest(body) for name,body in files.items()}}
+        for name,body in files.items():
+            path=self.web/owner/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(body)
+        (self.web/owner/'SOURCE.json').write_text(json.dumps(source))
+        archive=io.BytesIO()
+        with tarfile.open(fileobj=archive,mode='w:gz') as output:
+            for name,body in files.items():
+                path='LICENSE' if name=='LICENSE' else 'web/xcss-web/'+name
+                item=tarfile.TarInfo('xcss-'+revision+'/'+path);item.size=len(body)
+                output.addfile(item,io.BytesIO(body))
+        url='https://codeload.github.com/isarmg/xcss/tar.gz/'+revision
+        self.remote[url]=archive.getvalue()
+        self.receipt['modules'][1]['path']=owner+'/startup.js'
+        self.receipt['modules'][1]['sha256']=digest(self.runtime_code)
+        return owner,source,url
+
     def generate(self):
         (self.web / 'package-lock.json').write_text(json.dumps(self.lock))
         self.metadata.write_text(json.dumps(self.receipt))
@@ -163,6 +187,56 @@ class FrontendReceiptTests(unittest.TestCase):
         self.assertEqual(runtime['embedding']['source_files'],[{'path':'web/vendor/runtime/runtime.mjs','sha256':digest(self.runtime_code)}])
         font=next(item for item in components if item['name']=='Maple Mono complete fonts')
         self.assertTrue(all(item['path'].startswith('web/vendor/xcss/') for item in font['embedding']['source_files']))
+
+    def test_git_csr_startup_binds_original_source_license_and_server(self):
+        owner,source,url=self.git_csr_runtime()
+        component=next(item for item in self.generate() if item['name']=='xcss-web')
+        self.assertEqual(component['ref'],'urn:rendered-git:xcss-web:1.0.0')
+        self.assertEqual(component['source'],{'url':url,'sha256':digest(self.remote[url])})
+        self.assertEqual(component['embedding']['source_files'],[{'path':'web/'+owner+'/startup.js','sha256':digest(self.runtime_code)}])
+        self.assertEqual(component['files'][0]['sha256'],digest((self.stage/'bin/server').read_bytes()))
+        self.assertEqual((self.stage/component['licenses'][0]['path']).read_bytes(),(self.web/owner/'LICENSE').read_bytes())
+        receipt_path=self.stage/'share/external-components.json'
+        receipt=json.loads(receipt_path.read_text())
+        receipt['runtime_roots']=[{'ref':'fixture','files':component['files']}]
+        receipt_path.write_text(json.dumps(receipt))
+        bom=self.root/'runtime.json'
+        bom.write_text(json.dumps({'bomFormat':'CycloneDX','specVersion':'1.5','version':1,
+            'metadata':{'component':{'type':'application','name':'fixture','version':'1.0.0','bom-ref':'fixture'}},
+            'components':[],'dependencies':[{'ref':'fixture','dependsOn':[]}]}))
+        def finalize():
+            return frontend_receipt.sbom.finalize(self.stage,[bom],receipt_path,'fixture','1.0.0','1'*40,'fixture-target',self.source)
+        document=json.loads(finalize().read_text())
+        rendered=next(item for item in document['components'] if item['bom-ref']==component['ref'])
+        self.assertEqual(rendered['externalReferences'],[{'type':'distribution','url':url,
+            'hashes':[{'alg':'SHA-256','content':digest(self.remote[url])}]}])
+        release=document['metadata']['component']['bom-ref']
+        self.assertIn(component['ref'],next(item for item in document['dependencies'] if item['ref']==release)['dependsOn'])
+        (self.web/owner/'startup.js').write_bytes(b'changed after receipt generation\n')
+        with self.assertRaisesRegex(ValueError,'actual build input'):finalize()
+
+    def test_git_csr_vendor_rejects_wrong_schema_revision_and_package_identity(self):
+        owner,source,url=self.git_csr_runtime()
+        self.remote['https://codeload.github.com/isarmg/xcss/tar.gz/'+'b'*40]=self.remote[url]
+        for key,value in [('extra',True),('origin','https://github.com/another/xcss'),
+                          ('base_revision','main'),('base_revision','b'*40),('source_directory','web/other'),
+                          ('package','another-package'),('version','2.0.0')]:
+            with self.subTest(field=key):
+                changed={**source,key:value}
+                (self.web/owner/'SOURCE.json').write_text(json.dumps(changed))
+                with self.assertRaises(ValueError):self.generate()
+
+    def test_git_csr_vendor_cannot_relabel_changed_bytes_or_hide_local_files(self):
+        owner,source,url=self.git_csr_runtime()
+        changed=b'export const injected = true;\n'
+        (self.web/owner/'startup.js').write_bytes(changed)
+        source['files']['startup.js']=digest(changed)
+        (self.web/owner/'SOURCE.json').write_text(json.dumps(source))
+        self.receipt['modules'][1]['sha256']=digest(changed)
+        with self.assertRaisesRegex(ValueError,'original source revision'):self.generate()
+        self.git_csr_runtime()
+        (self.web/owner/'unlisted.js').write_bytes(changed)
+        with self.assertRaisesRegex(ValueError,'exact source inventory'):self.generate()
 
     def test_vendor_inventory_cannot_relabel_changed_original_bytes(self):
         self.native_vendors()
